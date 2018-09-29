@@ -1,6 +1,4 @@
-import torch, random, time, copy, os, numpy
-import language
-
+import torch, random, copy, os, numpy
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
@@ -131,7 +129,6 @@ class SingleBatch:
     self.masks = torch.ByteTensor(self.masks).to(device)
 
     return 0
-
 
 
 
