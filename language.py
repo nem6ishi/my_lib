@@ -4,11 +4,12 @@ special_vocabs = ["PADDING", "UNK", "SEQUENCE_START", "SEQUENCE_END"]
 
 
 class Lang:
-  def __init__(self, vocab_path):
+  def __init__(self, self.path):
+    self.path = self.path
     self.vocab2index = {}
     self.index2vocab = {}
     self.vocab_size = 0
-    self.create_vocab(vocab_path)
+    self.create_vocab()
 
   def add_word(self, word):
     if word not in self.vocab2index and len(word) > 0:
@@ -16,13 +17,13 @@ class Lang:
       self.index2vocab[self.vocab_size] = word
       self.vocab_size += 1
 
-  def create_vocab(self, vocab_path):
-    if not os.path.isfile(vocab_path):
-      raise ValueError("File does not exist: {}".format(vocab_path))
+  def create_vocab(self):
+    if not os.path.isfile(self.path):
+      raise ValueError("File does not exist: {}".format(self.path))
 
     for word in special_vocabs:
       self.add_word(word)
-    with open(vocab_path, "r", encoding='utf-8') as file:
+    with open(self.path, "r", encoding='utf-8') as file:
       for line in file:
         word = line.split()[0]
         self.add_word(word)
