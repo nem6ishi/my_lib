@@ -1,11 +1,13 @@
-import os, copy
+import os
 
 special_vocabs = ["PADDING", "UNK", "SEQUENCE_START", "SEQUENCE_END"]
 
 
 class Lang:
-  def __init__(self, self.path):
-    self.path = self.path
+  def __init__(self, path):
+    if not os.path.isfile(path):
+      raise ValueError("File does not exist: {}".format(path))
+    self.path = path
     self.vocab2index = {}
     self.index2vocab = {}
     self.vocab_size = 0
@@ -18,9 +20,6 @@ class Lang:
       self.vocab_size += 1
 
   def create_vocab(self):
-    if not os.path.isfile(self.path):
-      raise ValueError("File does not exist: {}".format(self.path))
-
     for word in special_vocabs:
       self.add_word(word)
     with open(self.path, "r", encoding='utf-8') as file:
@@ -30,27 +29,24 @@ class Lang:
 
 
   def sentence2indexes(self, sentence_as_list):
-    v2i = self.vocab2index
-
-    index_list = [v2i["SEQUENCE_START"]]
+    index_list = [self.vocab2index["SEQUENCE_START"]]
     for each in sentence_as_list:
-      if each not in v2i:
+      if each not in self.vocab2index:
         each = "UNK"
-      index_list.append(v2i[each])
-    index_list.append(v2i["SEQUENCE_END"])
+      index_list.append(self.vocab2index[each])
+    index_list.append(self.vocab2index["SEQUENCE_END"])
 
     return index_list
 
 
   def indexes2sentence(self, index_list):
     sentence_as_list = []
-    indexes = self.index2vocab.keys()
 
-    for each in index_list:
-      each = int(each)
-      if each not in indexes:
-        raise ValueError("Vocab index does not exist: {}".format(each))
-      word = lang.index2vocab[each]
+    for word_index in index_list:
+      word_index = int(word_index)
+      if word_index not in self.index2vocab:
+        raise ValueError("Vocab index does not exist: {}".format(word_index))
+      word = self.index2vocab[word_index]
       if word != "PADDING":
         sentence_as_list.append(word)
 
