@@ -1,0 +1,4 @@
+model/ 
+setting/
+*.txt
+*.sh
