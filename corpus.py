@@ -3,13 +3,14 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class SingleCorpus:
-  def __init__(self, lang, file_path, max_length=0): ### set max_length less than 0 to disable it
+  def __init__(self, lang, file_path, max_length=0, num_imort_line=-1): ### set max_length less than or equal to 0 to disable it
     if not os.path.isfile(file_path):
       raise ValueError("File does not exist: {0}".format(file_path))
 
     self.lang = lang
     self.file_path = file_path
-    self.max_length = max_length
+    self.max_length = max_length # the limit at first, will be updated actual max length when importing
+    self.num_imort_line = num_imort_line
 
     self.corpus_size = 0
     self.sentences = {}
@@ -19,11 +20,13 @@ class SingleCorpus:
     self.remove_indexes_set = self.check_length()
 
 
-  def check_length(self): # check length before importing FOR parallel corpus
+  def check_length(self): # check length before importing. doing this before import is for parallel corpus
     remove_indexes_set = set()
     if self.max_length > 0:
       with open(self.file_path, "r", encoding='utf-8') as file:
         for i, sent in enumerate(file):
+          if self.num_imort_line == i:
+            break
           len_sent = sent.count(' ') + 1
           if len_sent > self.max_length:
             remove_indexes_set.add(i)
@@ -38,17 +41,17 @@ class SingleCorpus:
     tmp_max_length = 0
     with open(self.file_path, "r", encoding='utf-8') as file:
       for i, sent in enumerate(file):
+        if self.num_imort_line == i:
+          break
         if i not in self.remove_indexes_set:
-          self.sentences[self.corpus_size] = sent ### save sentence as str, and convert it later
+          self.sentences[self.corpus_size] = sent ### save sentence as str first, and convert it later
           self.lengths[self.corpus_size] = sent.count(' ') + 1 + 2 ### '2' for "SEQUENCE_START" and "SEQUENCE_END"
           tmp_max_length = max([tmp_max_length, self.lengths[self.corpus_size]])
           self.is_not_converted[self.corpus_size] = True
           self.corpus_size += 1
         else:
           self.remove_indexes_set.remove(i)
-    self.max_length = tmp_max_length # update max_length to actual max_length
-
-    return 0
+    self.max_length = tmp_max_length # update to actual max_length
 
 
   def convert_into_indexes(self, sentence_index_list):
@@ -56,24 +59,21 @@ class SingleCorpus:
       if self.is_not_converted[idx]:
         self.sentences[idx] = self.lang.sentence2indexes(self.sentences[idx].split())
         self.is_not_converted[idx] = False
-    return 0
 
 
 
 class ParallelCorpus:
-  def __init__(self, src_lang, tgt_lang, src_file_path, tgt_file_path, max_length=0):
+  def __init__(self, src_lang, tgt_lang, src_file_path, tgt_file_path, max_length=0, num_imort_line=-1):
     self.corpus_size = 0
     self.share_corpus = True if (src_lang.path == tgt_lang.path and src_file_path == tgt_file_path) else False
-    self.max_length = 0
+    self.max_length = 0 # this will be updated when importing
+    self.num_imort_line = num_imort_line
 
-    self.src_corpus = SingleCorpus(src_lang, src_file_path, max_length)
-    if self.share_corpus:
-      self.tgt_corpus = self.src_corpus
-    else:
-      self.tgt_corpus = SingleCorpus(tgt_lang, tgt_file_path, max_length)
+    self.src_corpus = SingleCorpus(src_lang, src_file_path, max_length, self.num_imort_line)
+    self.tgt_corpus = self.src_corpus if self.share_corpus else SingleCorpus(tgt_lang, tgt_file_path, max_length, self.num_imort_line)
 
-      if self.src_corpus.corpus_size != self.tgt_corpus.corpus_size:
-        raise ValueError("Inappropriate pallalel corpus.")
+    if not self.share_corpus:
+      assert self.src_corpus.corpus_size == self.tgt_corpus.corpus_size
       combined_remove_indexes_set = self.src_corpus.remove_indexes_set | self.tgt_corpus.remove_indexes_set
       self.src_corpus.remove_indexes_set = copy.deepcopy(combined_remove_indexes_set)
       self.tgt_corpus.remove_indexes_set = copy.deepcopy(combined_remove_indexes_set)
@@ -83,19 +83,15 @@ class ParallelCorpus:
     self.src_corpus.import_file()
     if not self.share_corpus:
       self.tgt_corpus.import_file()
-    if not self.src_corpus.corpus_size==self.tgt_corpus.corpus_size:
-      raise
+    assert self.src_corpus.corpus_size==self.tgt_corpus.corpus_size
     self.corpus_size = self.src_corpus.corpus_size
     self.max_length = max([self.src_corpus.max_length, self.tgt_corpus.max_length])
-
-    return 0
 
 
   def convert_into_indexes(self, sentence_index_list):
     self.src_corpus.convert_into_indexes(sentence_index_list)
     if not self.share_corpus:
       self.tgt_corpus.convert_into_indexes(sentence_index_list)
-    return 0
 
 
 
@@ -112,7 +108,7 @@ class SingleBatch:
 
   def generate_random_indexes(self):
     self.sample_idxs = numpy.random.randint(0, self.corpus.corpus_size, self.fixed_batch_size)
-    return 0
+
 
   def generate_sequential_indexes(self, num_iter):
     num_done = self.fixed_batch_size * num_iter
@@ -122,7 +118,7 @@ class SingleBatch:
     else:
       batch_size = self.fixed_batch_size
     self.sample_idxs = list(range(num_done, num_done+batch_size))
-    return 0
+
 
   def add_padding_and_prepare_mask(self):
     max_length = max(self.lengths)
@@ -132,7 +128,6 @@ class SingleBatch:
       sent += pad
       mask = [0 for i in range(length)] + [1 for i in range(pad_len)]
       self.masks.append(mask)
-    return 0
 
 
   def generate_batch(self):
@@ -150,26 +145,26 @@ class SingleBatch:
     self.sentences = torch.LongTensor(self.sentences).to(device)
     self.masks = torch.ByteTensor(self.masks).to(device)
 
-    return 0
-
 
 
 class ParallelBatch:
   def __init__(self, parallel_corpus, fixed_batch_size):
     self.src_batch = SingleBatch(parallel_corpus.src_corpus, fixed_batch_size)
     self.tgt_batch = SingleBatch(parallel_corpus.tgt_corpus, fixed_batch_size)
+    self.batch_size = 0
+
 
   def generate_random_indexes(self):
     self.src_batch.generate_random_indexes()
     self.tgt_batch.sample_idxs = self.src_batch.sample_idxs
-    return 0
+
 
   def generate_sequential_indexes(self, num_iter):
     self.src_batch.generate_sequential_indexes(num_iter)
     self.tgt_batch.sample_idxs = self.src_batch.sample_idxs
-    return 0
+
 
   def generate_batch(self):
     self.src_batch.generate_batch()
     self.tgt_batch.generate_batch()
-    return 0
+    self.batch_size = self.src_batch.batch_size
