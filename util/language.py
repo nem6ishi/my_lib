@@ -30,28 +30,37 @@ class Lang:
         self.add_word(word)
 
 
-  def sentence2indexes(self, sentence_as_list):
+  def sentence2indexes(self, sentence_as_list, reverse=False):
     index_list = [self.vocab2index["SEQUENCE_START"]]
     for each in sentence_as_list:
-      index_list.append(self.vocab2index[each] if each in self.vocab2index else "UNK")
+      index_list.append(self.vocab2index[each] if each in self.vocab2index else self.vocab2index["UNK"])
     index_list.append(self.vocab2index["SEQUENCE_END"])
+
+    if reverse:
+      index_list.reverse()
+
     return index_list
 
 
-  def indexes2sentence(self, index_list, clean=True):
+  def indexes2sentence(self, index_list, clean=True, reverse=False):
     sentence_as_list = []
+    index_list = list(index_list)
+
+    if reverse:
+      index_list.reverse()
 
     for word_index in index_list:
       word_index = int(word_index)
       if word_index not in self.index2vocab:
         raise ValueError("Vocab index does not exist: {}".format(word_index))
       word = self.index2vocab[word_index]
-      if clean and word != "PADDING":
+      if word != "PADDING" or clean == False:
         sentence_as_list.append(word)
 
-    if clean and sentence_as_list[0] == "SEQUENCE_START":
-      sentence_as_list.pop(0)
-    if clean and len(sentence_as_list) > 0 and sentence_as_list[-1] == "SEQUENCE_END":
-      sentence_as_list.pop()
+    if clean:
+      if sentence_as_list[0] == "SEQUENCE_START":
+        sentence_as_list.pop(0)
+      if len(sentence_as_list) > 0 and sentence_as_list[-1] == "SEQUENCE_END":
+        sentence_as_list.pop()
 
     return sentence_as_list

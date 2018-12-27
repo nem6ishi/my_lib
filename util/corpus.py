@@ -3,13 +3,13 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class SingleCorpus:
-  def __init__(self, lang, file_path, max_length=0, num_imort_line=-1): ### set max_length less than or equal to 0 to disable it
+  def __init__(self, lang, file_path, max_length=-1, num_imort_line=-1): ### set max_length less than or equal to 0 to disable it
     if not os.path.isfile(file_path):
       raise ValueError("File does not exist: {0}".format(file_path))
 
     self.lang = lang
     self.file_path = file_path
-    self.max_length = max_length # the limit at first, will be updated actual max length when importing
+    self.max_length = max_length # the limit at first, but will be updated actual max length when importing
     self.num_imort_line = num_imort_line
 
     self.corpus_size = 0
@@ -45,8 +45,9 @@ class SingleCorpus:
           break
         if i not in self.remove_indexes_set:
           self.sentences[self.corpus_size] = sent ### save sentence as str first, and convert it later
-          self.lengths[self.corpus_size] = sent.count(' ') + 1 + 2 ### '2' for "SEQUENCE_START" and "SEQUENCE_END"
-          tmp_max_length = max([tmp_max_length, self.lengths[self.corpus_size]])
+          length = sent.count(' ') + 1 + 2 ### '2' for "SEQUENCE_START" and "SEQUENCE_END"
+          self.lengths[self.corpus_size] = length
+          tmp_max_length = max([tmp_max_length, length])
           self.is_not_converted[self.corpus_size] = True
           self.corpus_size += 1
         else:
@@ -70,7 +71,10 @@ class ParallelCorpus:
     self.num_imort_line = num_imort_line
 
     self.src_corpus = SingleCorpus(src_lang, src_file_path, max_length, self.num_imort_line)
-    self.tgt_corpus = self.src_corpus if self.share_corpus else SingleCorpus(tgt_lang, tgt_file_path, max_length, self.num_imort_line)
+    if self.share_corpus or tgt_file_path == None : # None for test time in which no tgt_corpus
+      self.tgt_corpus = self.src_corpus
+    else:
+      self.tgt_corpus = SingleCorpus(tgt_lang, tgt_file_path, max_length, self.num_imort_line)
 
     if not self.share_corpus:
       assert self.src_corpus.corpus_size == self.tgt_corpus.corpus_size
@@ -130,7 +134,7 @@ class SingleBatch:
       self.masks.append(mask)
 
 
-  def generate_batch(self):
+  def generate_batch(self, reverse=False):
     self.sentences = []
     self.lengths = []
     self.masks = []
@@ -138,7 +142,10 @@ class SingleBatch:
     self.corpus.convert_into_indexes(self.sample_idxs)
 
     for i, idx in enumerate(self.sample_idxs):
-      self.sentences.append(copy.deepcopy(self.corpus.sentences[idx]))
+      sent = copy.deepcopy(self.corpus.sentences[idx])
+      if reverse:
+        sent.reverse()
+      self.sentences.append(sent)
       self.lengths.append(self.corpus.lengths[idx])
     self.add_padding_and_prepare_mask()
 
@@ -149,9 +156,13 @@ class SingleBatch:
 
 class ParallelBatch:
   def __init__(self, parallel_corpus, fixed_batch_size):
-    self.src_batch = SingleBatch(parallel_corpus.src_corpus, fixed_batch_size)
-    self.tgt_batch = SingleBatch(parallel_corpus.tgt_corpus, fixed_batch_size)
+    self.fixed_batch_size = fixed_batch_size
+    self.src_corpus = parallel_corpus.src_corpus
+    self.tgt_corpus = parallel_corpus.tgt_corpus
     self.batch_size = 0
+
+    self.src_batch = SingleBatch(self.src_corpus, self.fixed_batch_size)
+    self.tgt_batch = SingleBatch(self.tgt_corpus, self.fixed_batch_size)
 
 
   def generate_random_indexes(self):
@@ -164,7 +175,7 @@ class ParallelBatch:
     self.tgt_batch.sample_idxs = self.src_batch.sample_idxs
 
 
-  def generate_batch(self):
-    self.src_batch.generate_batch()
-    self.tgt_batch.generate_batch()
+  def generate_batch(self, src_reverse=False, tgt_reverse=False):
+    self.src_batch.generate_batch(src_reverse)
+    self.tgt_batch.generate_batch(tgt_reverse)
     self.batch_size = self.src_batch.batch_size
