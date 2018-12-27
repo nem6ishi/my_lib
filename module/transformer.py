@@ -6,7 +6,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class PositionalEncoding(torch.nn.Module):
-  def __init__(self, emb_dim, dropout_p=0.1, max_len=1000):
+  def __init__(self, emb_dim, dropout_p=0.1, max_len=1000): # if change max_len, loading models may be compricated
     super(PositionalEncoding, self).__init__()
     self.dropout = torch.nn.Dropout(p=dropout_p)
 
@@ -217,7 +217,7 @@ class TransformerDecoderBasedLanguageModelLayer(torch.nn.Module):
     self.dropout = torch.nn.Dropout(dropout_p)
 
   def forward(self, input, tgt_mask):
-    attn_out, _ = self.self_attn(input, input, input, tgt_mask, tgt_mask, use_sub_seq_mask=True)
+    attn_out, _ = self.self_attn(input, input, input, tgt_mask, tgt_mask, use_subseq_mask=True)
     out = self.layer_norm1(self.dropout(attn_out) + input)
     ff_out = self.feed_forward(out).masked_fill(tgt_mask.unsqueeze(-1).expand(-1, -1, out.size(-1)), 0.0)
     out = self.layer_norm3(self.dropout(ff_out) + out)

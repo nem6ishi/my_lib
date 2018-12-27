@@ -11,12 +11,15 @@ def remove_sp_marker(string):
   return string
 
 
-def apply_sp(file_path):
+def apply_sp(file_path, use_kytea=False):
   text = ""
   with open(file_path, "r") as file:
     for line in file:
       line = line.strip()
-      text += remove_sp_marker(line) + "\n"
+      line = remove_sp_marker(line) + "\n"
+      if use_kytea:
+        line = line.replace(" ", "")
+      text += line
   with open(file_path, "w") as file:
     file.write(text)
 
@@ -47,8 +50,8 @@ def calc_bleu(reference_file_path, prediction_file_path, use_sp, use_kytea, save
   shutil.copyfile(prediction_file_path, prediction_file)
 
   if use_sp:
-    apply_sp(reference_file)
-    apply_sp(prediction_file)
+    apply_sp(reference_file, use_kytea)
+    apply_sp(prediction_file, use_kytea)
 
   if use_kytea:
     apply_kytea(reference_file)
