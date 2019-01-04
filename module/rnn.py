@@ -4,6 +4,45 @@ import numpy as np
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+class FixedLengthRnnLanguageModel(torch.nn.Module):
+  def __init__(self, vocab_size, emb_dim, model_dim, num_layers, bi_directional=False, dropout_p=0.1, rnn_type="gru", padding_idx=0):
+    super(FixedLengthRnnLanguageModel, self).__init__()
+
+    self.vocab_size = vocab_size
+    self.emb_dim = emb_dim
+    self.model_dim = model_dim
+    self.num_layers = num_layers
+    self.bi_directional = bi_directional
+    self.n_directions = 2 if self.bi_directional else 1
+
+    self.dropout_p = dropout_p
+    self.rnn_type = rnn_type
+
+    self.embedding = torch.nn.Embedding(self.vocab_size, self.emb_dim, padding_idx=padding_idx)
+    if self.rnn_type == "lstm":
+        self.rnn = torch.nn.LSTM(self.emb_dim, self.model_dim, self.num_layers, batch_first=True, dropout=self.dropout_p, bidirectional=self.bi_directional)
+    elif self.rnn_type == "gru":
+        self.rnn = torch.nn.GRU(self.emb_dim, self.model_dim, self.num_layers, batch_first=True, dropout=self.dropout_p, bidirectional=self.bi_directional)
+    else:
+        raise
+    self.dropout = torch.nn.Dropout(self.dropout_p)
+    self.out = torch.nn.Linear(self.model_dim, self.vocab_size)
+
+
+  def forward(self, input):
+
+    embedded = self.dropout(self.embedding(input))
+    outputs, last_hidden = self.rnn(embedded)
+    last_layer_last_hidden = last_hidden[-1]
+
+    output = self.out(last_layer_last_hidden)
+    output = torch.nn.functional.log_softmax(output, dim=1).squeeze(1)
+
+    return output
+
+
+
+
 
 class EncoderRNN(torch.nn.Module):
   def __init__(self, vocab_size, emb_dim, model_dim, num_layers, bi_directional, dropout_p, rnn_type="lstm", padding_idx=0, reverse_input=False):
@@ -33,7 +72,7 @@ class EncoderRNN(torch.nn.Module):
 
   def forward(self, input):
     input = input.copy()
-    length = ###
+    #length =
     input, sort_indexes = self.sort(input, length)
 
     if self.reverse_input:

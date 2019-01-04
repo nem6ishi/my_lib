@@ -3,7 +3,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class SingleCorpus:
-  def __init__(self, lang, file_path, max_length=-1, num_imort_line=-1): ### set max_length less than or equal to 0 to disable it
+  def __init__(self, lang, file_path, max_length=0, num_imort_line=-1): ### set max_length less than or equal to 0 to disable it
     if not os.path.isfile(file_path):
       raise ValueError("File does not exist: {0}".format(file_path))
 

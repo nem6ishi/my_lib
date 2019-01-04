@@ -40,8 +40,8 @@ def calc_bleu(reference_file_path, prediction_file_path, use_sp, use_kytea, save
   time_stamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
 
   if file_name=="":
-    reference_file = save_dir + "/tmp_reference_{}.txt".format(time_stamp)
-    prediction_file = save_dir + "/tmp_prediction_{}.txt".format(time_stamp)
+    reference_file = save_dir + "/tmp_ref_{}.txt".format(time_stamp)
+    prediction_file = save_dir + "/modified_pre_{}.txt".format(time_stamp)
   else:
     reference_file = save_dir + "/{}_ref_{}.txt".format(file_name, time_stamp)
     prediction_file = save_dir + "/{}_pre_{}.txt".format(file_name, time_stamp)

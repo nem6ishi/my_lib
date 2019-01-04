@@ -18,8 +18,8 @@ class PositionalEncoding(torch.nn.Module):
     pe = pe.unsqueeze(0)
     self.register_buffer('pe', pe)
 
-  def forward(self, x, mask):
-    x = x + self.pe[:, :x.size(1)]
+  def forward(self, x, mask, time_step=0):
+    x = x + self.pe[:, time_step:time_step+x.size(1)]
     x.masked_fill_(mask.unsqueeze(-1).expand(-1, -1, x.size(-1)), 0.0)
     return self.dropout(x)
 
@@ -41,13 +41,23 @@ class MultiHeadedAttention(torch.nn.Module):
     self.dropout = torch.nn.Dropout(dropout_p)
 
 
-  def forward(self, query, key, value, q_mask, kv_mask, use_subseq_mask=False):
+  def forward(self, query, key, value, q_mask, kv_mask, use_subseq_mask=False, layer_cache=None):
     batch_size = query.size(0)
 
-    q_mask_here = q_mask.unsqueeze(1).unsqueeze(-1).expand(-1, self.num_head, -1, self.dim_per_head)
-    kv_mask_here = kv_mask.unsqueeze(1).unsqueeze(-1).expand(-1, self.num_head, -1, self.dim_per_head)
+    if layer_cache != None:
+      if torch.is_tensor(layer_cache["kv_mask"]):
+        kv_mask = torch.cat((layer_cache["kv_mask"], kv_mask), 1)
+        key = torch.cat((layer_cache["key"], key), 1)
+        value = torch.cat((layer_cache["value"], value), 1)
 
+      layer_cache["kv_mask"] = kv_mask
+      layer_cache["key"] = key
+      layer_cache["value"] = value
+
+    q_mask_here = q_mask.unsqueeze(1).unsqueeze(-1).expand(-1, self.num_head, -1, self.dim_per_head)
     query = self.linear_querys(query).view(batch_size, -1, self.num_head, self.dim_per_head).transpose(1, 2).masked_fill(q_mask_here, 0.0)
+
+    kv_mask_here = kv_mask.unsqueeze(1).unsqueeze(-1).expand(-1, self.num_head, -1, self.dim_per_head)
     key = self.linear_keys(key).view(batch_size, -1, self.num_head, self.dim_per_head).transpose(1, 2).masked_fill(kv_mask_here, 0.0)
     value = self.linear_values(value).view(batch_size, -1, self.num_head, self.dim_per_head).transpose(1, 2).masked_fill(kv_mask_here, 0.0)
 
@@ -74,7 +84,8 @@ class MultiHeadedAttention(torch.nn.Module):
 
 
   def get_subseq_mask(self, size):
-    subsequent_mask = np.triu(np.ones(size), k=1).astype('uint8')
+    k = 1 + size[-1] - size[-2]
+    subsequent_mask = np.triu(np.ones(size), k=k).astype('uint8')
     subsequent_mask = torch.from_numpy(subsequent_mask).to(device)
     return subsequent_mask
 
@@ -151,8 +162,8 @@ class TransformerDecoderLayer(torch.nn.Module):
     self.layer_norm3 = torch.nn.LayerNorm(model_dim, eps=1e-6)
     self.dropout = torch.nn.Dropout(dropout_p)
 
-  def forward(self, input, encoder_output, src_mask, tgt_mask):
-    attn_out, _ = self.self_attn(input, input, input, tgt_mask, tgt_mask, use_subseq_mask=True)
+  def forward(self, input, encoder_output, src_mask, tgt_mask, layer_cache=None):
+    attn_out, _ = self.self_attn(input, input, input, tgt_mask, tgt_mask, use_subseq_mask=True, layer_cache=layer_cache)
     out = self.layer_norm1(self.dropout(attn_out) + input)
 
     context_out, _ = self.context_attn(out, encoder_output, encoder_output, tgt_mask, src_mask)
@@ -183,13 +194,15 @@ class TransformerDecoder(torch.nn.Module):
     self.dropout = torch.nn.Dropout(self.dropout_p)
 
 
-  def forward(self, input, encoder_output, src_mask):
-    tgt_mask = (input==torch.zeros(input.size(), dtype=torch.long).to(device))
+  def forward(self, input, encoder_output, src_mask, time_step=0, layer_cache=None):
+    tgt_mask = (input == torch.zeros(input.size(), dtype=torch.long).to(device))
     embedded = self.dropout(self.embedding(input))
-    x = self.positinal_enc(embedded, tgt_mask)
-    for layer in self.layers:
-      x = layer(x, encoder_output, src_mask, tgt_mask)
+    x = self.positinal_enc(embedded, tgt_mask, time_step=time_step)
+    for i, layer in enumerate(self.layers):
+      x = layer(x, encoder_output, src_mask, tgt_mask,
+                layer_cache=layer_cache[i] if layer_cache!=None else None)
     return x
+
 
 
 
@@ -204,6 +217,8 @@ class TransformerGenerator(torch.nn.Module):
     output = self.out(input)
     output = torch.nn.functional.log_softmax(output, dim=-1)
     return output
+
+
 
 
 

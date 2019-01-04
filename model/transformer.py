@@ -25,8 +25,8 @@ class LanguageModel(torch.nn.Module):
 
   def decode(self, input):
     decoder_output = self.decoder(input)
-    decoder_prob_outputs = self.generator(decoder_output)
-    return decoder_prob_outputs
+    generator_output = self.generator(decoder_output)
+    return decoder_output, generator_output
 
 
 
@@ -89,12 +89,16 @@ class TransformerModel(torch.nn.Module):
     decoder_word_outputs[:, 0] = start_token # first word
     decoder_prob_outputs = torch.zeros((batch_size, max_target_length, self.tgt_lang.vocab_size), dtype=torch.float).to(device)
 
+    layer_cache = {}
+    for i in range(self.decoder.num_layers):
+      layer_cache[i] = {"kv_mask": None, "key": None, "value": None}
+
     # decode words one by one
     for i in range(1, max_target_length):
-      decoder_output = self.decoder(decoder_word_outputs[:, :i], encoder_outputs, src_mask)
-      decoder_output = self.generator(decoder_output[:, -1])
+      decoder_output = self.decoder(decoder_word_outputs[:, i-1:i], encoder_outputs, src_mask, i-1, layer_cache)
+      generator_output = self.generator(decoder_output[:, -1])
 
-      likelihood, index = decoder_output.data.topk(1)
+      likelihood, index = generator_output.data.topk(1)
       index = index.squeeze(1)
 
       for j, each in enumerate(index):
@@ -104,9 +108,10 @@ class TransformerModel(torch.nn.Module):
           flag[j] = True
 
       decoder_word_outputs[:, i] = index
-      decoder_prob_outputs[:, i] = decoder_output
+      decoder_prob_outputs[:, i] = generator_output
 
-      if all(flag): break
+      if all(flag):
+        break
 
     return decoder_word_outputs, decoder_prob_outputs
 
