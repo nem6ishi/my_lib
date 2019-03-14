@@ -43,12 +43,9 @@ class FixedLengthRnnLanguageModel(torch.nn.Module):
 
 
 
-
 class EncoderRNN(torch.nn.Module):
-  def __init__(self, vocab_size, emb_dim, model_dim, num_layers, bi_directional, dropout_p, rnn_type="lstm", padding_idx=0, reverse_input=False):
+  def __init__(self, vocab_size, emb_dim, model_dim, num_layers, bi_directional=False, dropout_p=0.1, padding_idx=0, reverse_input=False):
     super(EncoderRNN, self).__init__()
-
-    self.reverse_input = reverse_input
 
     self.vocab_size = vocab_size
     self.emb_dim = emb_dim
@@ -58,176 +55,271 @@ class EncoderRNN(torch.nn.Module):
     self.n_directions = 2 if self.bi_directional else 1
 
     self.dropout_p = dropout_p
-    self.rnn_type = rnn_type
+    self.reverse_input = reverse_input
 
     self.embedding = torch.nn.Embedding(self.vocab_size, self.emb_dim, padding_idx=padding_idx)
-    if self.rnn_type == "lstm":
-        self.rnn = torch.nn.LSTM(self.emb_dim, self.model_dim, self.num_layers, batch_first=True, dropout=self.dropout_p, bidirectional=self.bi_directional)
-    elif self.rnn_type == "gru":
-        self.rnn = torch.nn.GRU(self.emb_dim, self.model_dim, self.num_layers, batch_first=True, dropout=self.dropout_p, bidirectional=self.bi_directional)
-    else:
-        raise
+    self.lstm = torch.nn.LSTM(self.emb_dim, self.model_dim, self.num_layers, batch_first=True, dropout=self.dropout_p, bidirectional=self.bi_directional)
     self.dropout = torch.nn.Dropout(self.dropout_p)
 
 
-  def forward(self, input):
-    input = input.copy()
-    #length =
-    input, sort_indexes = self.sort(input, length)
+  def forward(self, batch):
+    sort_indexes = self.sort(batch)
 
     if self.reverse_input:
-      input = self.reverse_sentence(input)
+      sentences = self.reverse_sentence(batch)
+    else:
+      sentences = batch.sentences
 
-    embedded = self.dropout(self.embedding(input))
-    embedded = torch.nn.utils.rnn.pack_padded_sequence(embedded, length, batch_first=True) # form matrix into list, to care paddings in rnn
-    outputs, last_hidden = self.rnn(embedded)
+    embedded = self.dropout(self.embedding(sentences)) # [B,T,H]
+    embedded = torch.nn.utils.rnn.pack_padded_sequence(embedded, batch.lengths, batch_first=True) # form matrix into list, to care paddings in rnn
+    outputs, (hidden, cell) = self.lstm(embedded)
     outputs, _ = torch.nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True) # reform into matrix
 
-    outputs, last_hidden = self.resort(sort_indexes, outputs, last_hidden)
+    outputs, hidden, cell = self.resort(sort_indexes, batch, outputs, hidden, cell)
 
-    return outputs, last_hidden
-
-
-  def sort(self, input, length):
-    length, sort_indexes = torch.LongTensor(length).sort(0, descending=True)
-    length = length.tolist()
-    input = input[sort_indexes]
-    return input, sort_indexes
+    return outputs, (hidden, cell)
 
 
-  def resort(self, sort_indexes, outputs, last_hidden):
+  def sort(self, batch):
+    batch.lengths, sort_indexes = torch.LongTensor(batch.lengths).sort(0, descending=True)
+    batch.lengths = batch.lengths.tolist()
+    batch.sentences = batch.sentences[sort_indexes]
+    batch.masks = batch.masks[sort_indexes]
+
+    return sort_indexes
+
+
+  def resort(self, sort_indexes, batch, outputs, hidden, cell):
     _, resort_indexes = sort_indexes.sort(0, descending=False)
 
+    batch.lengths = torch.LongTensor(batch.lengths)[resort_indexes].tolist()
+    batch.sentences = batch.sentences[resort_indexes]
+    batch.masks = batch.masks[resort_indexes]
+
     outputs = outputs[resort_indexes]
-    if rnn_type=="lstm":
-      hidden = last_hidden[0][:, resort_indexes]
-      cell = last_hidden[1][:, resort_indexes]
-      last_hidden = (hidden, cell)
-    elif self.rnn_type == "gru":
-      last_hidden = last_hidden[:, resort_indexes]
+    hidden = hidden[:, resort_indexes]
+    cell = cell[:, resort_indexes]
 
-    return outputs, last_hidden
+    return outputs, hidden, cell
 
 
-
-  def reverse_sentence(self, input, length):
-    batch_length = input.size(1)
-    reversed_input = torch.LongTensor(input.size()).to(device) # keep original sentences from reversing
+  def reverse_sentence(self, batch):
+    batch_length = batch.sentences.size(1)
+    reversed_sentences = torch.LongTensor(batch.sentences.size()).to(device) # keep original sentences from reversing
 
     # turn all
-    reversed_input = input[:, list(range(batch_length-1, -1, -1))]
+    reversed_sentences = batch.sentences[:, list(range(batch_length-1, -1, -1))]
 
     # shift words and paddings
-    for i, each in enumerate(length):
+    for i, each in enumerate(batch.lengths):
       num_padding = batch_length - each
       if num_padding > 0:
-        reversed_input[i] = torch.cat((reversed_input[i, num_padding:], reversed_input[i, :num_padding]), 0)
+        reversed_sentences[i] = torch.cat((reversed_sentences[i, num_padding:], reversed_sentences[i, :num_padding]), 0)
 
-    return reversed_input
-
-
-
-def linear_transform_for_decoder_hidden(self, hidden, cell):
-  if not self.need_transform:
-    return (hidden, cell)
-
-  batch_size = hidden.size(1)
-
-  hidden = hidden.transpose(0, 1).contiguous().view(batch_size, -1)
-  hidden = torch.tanh(self.linear_hidden(hidden))
-  hidden = hidden.view(batch_size, self.decoder_num_layers, self.decoder_model_dim).transpose(0, 1).contiguous()
-
-  cell = cell.transpose(0, 1).contiguous().view(batch_size, -1)
-  cell = torch.tanh(self.linear_cell(cell))
-  cell = cell.view(batch_size, self.decoder_num_layers, self.decoder_model_dim).transpose(0, 1).contiguous()
-
-  return (hidden, cell)
+    return reversed_sentences
 
 
 
 
-class BahdanauDecoderRNN(torch.nn.Module):
-  def __init__(self, setting, lang):
-    super(BahdanauDecoderRNN, self).__init__()
 
-    self.lang = lang
+class LuongDecoderRNN(torch.nn.Module):
+  def __init__(self, vocab_size, emb_dim, model_dim, num_layers, encoder_output_dim, dropout_p=0.1, padding_idx=0):
+    super(LuongDecoderRNN, self).__init__()
 
-    self.emb_dim = setting["decoder_vars"]["emb_dim"]
-    self.model_dim = setting["decoder_vars"]["model_dim"]
-    self.num_layers = setting["decoder_vars"]["num_layers"]
+    self.vocab_size = vocab_size
+    self.emb_dim = emb_dim
+    self.model_dim = model_dim
+    self.num_layers = num_layers
+    self.dropout_p = dropout_p
 
-    self.dropout_p = setting["train_vars"]["dropout_p"]
-    self.encoder_n_directions = 2 if setting["encoder_vars"]["bi_directional"] else 1
-    self.encoder_model_dim = setting["encoder_vars"]["model_dim"]
+    self.encoder_output_dim = encoder_output_dim
 
-    self.embedding = torch.nn.Embedding(self.lang.vocab_size, self.emb_dim, padding_idx=self.lang.vocab2index["PADDING"])
-    if setting["paths"]["tgt_vocab_emb"] != None:
-      self.embedding.weight.data = torch.from_numpy(np.load(setting["paths"]["tgt_vocab_emb"])).float()
-
+    self.embedding = torch.nn.Embedding(self.vocab_size, self.emb_dim, padding_idx=padding_idx)
+    self.lstm = torch.nn.LSTM(self.emb_dim+self.model_dim, self.model_dim, num_layers=self.num_layers, batch_first=True, dropout=self.dropout_p)
+    self.Wa = torch.nn.Linear(self.encoder_output_dim, self.num_layers*self.model_dim, bias=False)
+    self.Wc = torch.nn.Linear(self.num_layers*self.model_dim + self.encoder_output_dim, self.model_dim, bias=False)
+    self.Ws = torch.nn.Linear(self.model_dim, self.vocab_size)
     self.dropout = torch.nn.Dropout(self.dropout_p)
-    self.lstm = torch.nn.LSTM(self.emb_dim + self.encoder_model_dim*self.encoder_n_directions, self.model_dim, num_layers=self.num_layers, batch_first=True, dropout=self.dropout_p)
-    self.out = torch.nn.Linear(self.model_dim, self.lang.vocab_size)
-
-    self.attn = torch.nn.Linear(self.num_layers*self.model_dim + self.encoder_model_dim*self.encoder_n_directions, self.model_dim)
-    self.v = torch.nn.Linear(self.model_dim, 1, bias=False)
 
 
   def forward(self, input, dec_state, encoder_outputs, src_mask):
-    embedded = self.dropout(self.embedding(input))
+    batch_size = input.size(0)
 
+    embedded = self.dropout(self.embedding(input))
+    lstm_input = torch.cat((embedded, dec_state.h_tilde.unsqueeze(1)), 2) # input feeding
+
+    output, (dec_state.hidden, dec_state.cell) = self.lstm(lstm_input, (dec_state.hidden, dec_state.cell))
     contexts, dec_state.att_weights = self.attention(dec_state.hidden, encoder_outputs, src_mask)
 
-    lstm_input = torch.cat((embedded, contexts), 2)
-    output, (dec_state.hidden, dec_state.cell) = self.lstm(lstm_input, (dec_state.hidden, dec_state.cell))
-
-    output = self.out(output.squeeze(1))
+    dec_state.h_tilde = torch.tanh(self.Wc(torch.cat((dec_state.hidden.transpose(0, 1).contiguous().view(batch_size, -1), contexts), 1)))
+    output = self.Ws(dec_state.h_tilde)
     output = torch.nn.functional.log_softmax(output, dim=1).squeeze(1)
 
     return output
 
 
-  def attention(self, hidden, encoder_outputs, src_mask):
+  def attention(self, hidden, encoder_outputs, mask):
+    if not torch.is_tensor(encoder_outputs): # not use attention
+      contexts = torch.zeros(batch_size, self.encoder_output_dim).to(device)
+      return contexts, None
+
     batch_size = encoder_outputs.size(0)
     input_sentence_length = encoder_outputs.size(1)
 
-    H = hidden.transpose(0, 1).contiguous().view(batch_size, self.num_layers*self.model_dim)
-    H = H.unsqueeze(1).expand(H.size(0), input_sentence_length, H.size(1))
+    hidden = hidden.transpose(0, 1).contiguous().view(batch_size, -1)
+    score = self.Wa(encoder_outputs)
+    score = torch.bmm(hidden.unsqueeze(1), score.transpose(1,2)).squeeze(1)
+    score.data.masked_fill_(mask, float('-inf'))
 
-    energy = torch.tanh(self.attn(torch.cat((H, encoder_outputs), 2)))
-    energy = self.v(energy).transpose(1,2)
-
-    energy.data.masked_fill_(src_mask.unsqueeze(1), float('-inf'))
-
-    att_weights = torch.nn.functional.softmax(energy, dim=2)
-    contexts = torch.bmm(att_weights, encoder_outputs)
+    att_weights = torch.nn.functional.softmax(score, dim=1)
+    contexts = torch.bmm(att_weights.unsqueeze(1), encoder_outputs).squeeze(1)
 
     return contexts, att_weights
 
 
 
-class LuongDecoderRNN(torch.nn.Module):
+class DecoderState:
+  def __init__(self, attention_type, hidden, cell=None):
+    self.hidden = hidden
+    self.cell = cell
+    if attention_type == "luong_general":
+      size = (hidden.size(1), hidden.size(2))
+      self.h_tilde = torch.zeros(size).to(device)
+    self.att_weights = None
+
+
+
+
+class OldEncoderRNN(torch.nn.Module):
   def __init__(self, setting, lang):
-    super(LuongDecoderRNN, self).__init__()
+    super(OldEncoderRNN, self).__init__()
+
+    self.lang = lang
+    self.reverse_input = setting["options"]["reverse_input"]
+
+    self.emb_size = setting["encoder_vars"]["emb_size"]
+    self.hidden_size = setting["encoder_vars"]["hidden_size"]
+    self.n_layers = setting["encoder_vars"]["num_layers"]
+    self.bi_directional = setting["encoder_vars"]["bi_directional"]
+    self.n_directions = 2 if self.bi_directional else 1
+
+    self.decoder_num_layers = setting["decoder_vars"]["num_layers"]
+    self.decoder_hidden_size = setting["decoder_vars"]["hidden_size"]
+    self.dropout_p = setting["train_vars"]["dropout_p"]
+
+    self.embedding = torch.nn.Embedding(self.lang.vocab_size, self.emb_size, padding_idx=self.lang.vocab2index["PADDING"])
+    if setting["paths"]["src_vocab_emb"] != None:
+      self.embedding.weight.data = torch.from_numpy(np.load(setting["paths"]["src_vocab_emb"])).float()
+
+    self.dropout = torch.nn.Dropout(self.dropout_p)
+    self.lstm = torch.nn.LSTM(self.emb_size, self.hidden_size, self.n_layers, batch_first=True, dropout=self.dropout_p, bidirectional=self.bi_directional)
+
+    if (not self.bi_directional) and (self.n_layers == self.decoder_num_layers) and (self.hidden_size == self.decoder_hidden_size):
+      self.need_transform = False
+    else:
+      self.need_transform = True
+      self.linear_hidden = torch.nn.Linear(self.n_layers*self.hidden_size*self.n_directions, self.decoder_num_layers*self.decoder_hidden_size)
+      self.linear_cell = torch.nn.Linear(self.n_layers*self.hidden_size*self.n_directions, self.decoder_num_layers*self.decoder_hidden_size)
+
+
+  def forward(self, batch):
+    sort_indexes = self.sort(batch)
+
+    if self.reverse_input:
+      sentences = self.reverse_sentence(batch)
+    else:
+      sentences = batch.sentences
+
+    embedded = self.dropout(self.embedding(sentences)) # [B,T,H]
+    embedded = torch.nn.utils.rnn.pack_padded_sequence(embedded, batch.lengths, batch_first=True) # form matrix into list, to care paddings in rnn
+    outputs, (hidden, cell) = self.lstm(embedded)
+    outputs, _ = torch.nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True) # reform into matrix
+    (hidden, cell) = self.linear_transform_for_decoder_hidden(hidden, cell)
+
+    outputs, hidden, cell = self.resort(sort_indexes, batch, outputs, hidden, cell)
+
+    return outputs, (hidden, cell)
+
+
+  def linear_transform_for_decoder_hidden(self, hidden, cell):
+    if not self.need_transform:
+      return (hidden, cell)
+
+    batch_size = hidden.size(1)
+
+    hidden = hidden.transpose(0, 1).contiguous().view(batch_size, -1)
+    hidden = torch.tanh(self.linear_hidden(hidden))
+    hidden = hidden.view(batch_size, self.decoder_num_layers, self.decoder_hidden_size).transpose(0, 1).contiguous()
+
+    cell = cell.transpose(0, 1).contiguous().view(batch_size, -1)
+    cell = torch.tanh(self.linear_cell(cell))
+    cell = cell.view(batch_size, self.decoder_num_layers, self.decoder_hidden_size).transpose(0, 1).contiguous()
+
+    return (hidden, cell)
+
+
+  def sort(self, batch):
+    batch.lengths, sort_indexes = torch.LongTensor(batch.lengths).sort(0, descending=True)
+    batch.lengths = batch.lengths.tolist()
+    batch.sentences = batch.sentences[sort_indexes]
+    batch.masks = batch.masks[sort_indexes]
+
+    return sort_indexes
+
+
+  def resort(self, sort_indexes, batch, outputs, hidden, cell):
+    _, resort_indexes = sort_indexes.sort(0, descending=False)
+
+    batch.lengths = torch.LongTensor(batch.lengths)[resort_indexes].tolist()
+    batch.sentences = batch.sentences[resort_indexes]
+    batch.masks = batch.masks[resort_indexes]
+
+    outputs = outputs[resort_indexes]
+    hidden = hidden[:, resort_indexes]
+    cell = cell[:, resort_indexes]
+
+    return outputs, hidden, cell
+
+
+  def reverse_sentence(self, batch):
+    batch_length = batch.sentences.size(1)
+    reversed_sentences = torch.LongTensor(batch.sentences.size()).to(device) # keep original sentences from reversing
+
+    # turn all
+    reversed_sentences = batch.sentences[:, list(range(batch_length-1, -1, -1))]
+
+    # shift words and paddings
+    for i, each in enumerate(batch.lengths):
+      num_padding = batch_length - each
+      if num_padding > 0:
+        reversed_sentences[i] = torch.cat((reversed_sentences[i, num_padding:], reversed_sentences[i, :num_padding]), 0)
+
+    return reversed_sentences
+
+
+class OldLuongDecoderRNN(torch.nn.Module):
+  def __init__(self, setting, lang):
+    super(OldLuongDecoderRNN, self).__init__()
 
     self.lang = lang
 
-    self.emb_dim = setting["decoder_vars"]["emb_dim"]
-    self.model_dim = setting["decoder_vars"]["model_dim"]
-    self.num_layers = setting["decoder_vars"]["num_layers"]
+    self.emb_size = setting["decoder_vars"]["emb_size"]
+    self.hidden_size = setting["decoder_vars"]["hidden_size"]
+    self.n_layers = setting["decoder_vars"]["num_layers"]
     self.dropout_p = setting["train_vars"]["dropout_p"]
 
     self.encoder_n_directions = 2 if setting["encoder_vars"]["bi_directional"] else 1
-    self.encoder_model_dim = setting["encoder_vars"]["model_dim"]
+    self.encoder_hidden_size = setting["encoder_vars"]["hidden_size"]
 
-    self.embedding = torch.nn.Embedding(self.lang.vocab_size, self.emb_dim, padding_idx=self.lang.vocab2index["PADDING"])
+    self.embedding = torch.nn.Embedding(self.lang.vocab_size, self.emb_size, padding_idx=self.lang.vocab2index["PADDING"])
     if setting["paths"]["tgt_vocab_emb"] != None:
       self.embedding.weight.data = torch.from_numpy(np.load(setting["paths"]["tgt_vocab_emb"])).float()
 
     self.dropout = torch.nn.Dropout(self.dropout_p)
-    self.lstm = torch.nn.LSTM(self.embedding.embedding_dim+self.model_dim, self.model_dim, num_layers=self.num_layers, batch_first=True, dropout=self.dropout_p)
-    self.Wa = torch.nn.Linear(self.encoder_n_directions*self.encoder_model_dim, self.num_layers*self.model_dim, bias=False)
-    self.Wc = torch.nn.Linear(self.num_layers*self.model_dim + self.encoder_n_directions*self.encoder_model_dim, self.model_dim, bias=False)
-    self.Ws = torch.nn.Linear(self.model_dim, self.lang.vocab_size)
+    self.lstm = torch.nn.LSTM(self.embedding.embedding_dim+self.hidden_size, self.hidden_size, num_layers=self.n_layers, batch_first=True, dropout=self.dropout_p)
+    self.Wa = torch.nn.Linear(self.encoder_n_directions*self.encoder_hidden_size, self.n_layers*self.hidden_size, bias=False)
+    self.Wc = torch.nn.Linear(self.n_layers*self.hidden_size + self.encoder_n_directions*self.encoder_hidden_size, self.hidden_size, bias=False)
+    self.Ws = torch.nn.Linear(self.hidden_size, self.lang.vocab_size)
 
 
   def forward(self, input, dec_state, encoder_outputs, src_mask):
@@ -249,7 +341,7 @@ class LuongDecoderRNN(torch.nn.Module):
 
   def attention(self, hidden, encoder_outputs, mask):
     if not torch.is_tensor(encoder_outputs): # not use attention
-      contexts = torch.zeros(batch_size, self.encoder_model_dim*self.encoder_n_directions).to(device)
+      contexts = torch.zeros(batch_size, self.encoder_hidden_size*self.encoder_n_directions).to(device)
       return contexts, None
 
     batch_size = encoder_outputs.size(0)
@@ -264,46 +356,3 @@ class LuongDecoderRNN(torch.nn.Module):
     contexts = torch.bmm(att_weights.unsqueeze(1), encoder_outputs).squeeze(1)
 
     return contexts, att_weights
-
-
-
-class DecoderRNN(torch.nn.Module):
-  def __init__(self, setting, lang):
-    super(DecoderRNN, self).__init__()
-
-    self.lang = lang
-
-    self.emb_dim = setting["decoder_vars"]["emb_dim"]
-    self.model_dim = setting["decoder_vars"]["model_dim"]
-    self.num_layers = setting["decoder_vars"]["num_layers"]
-    self.dropout_p = setting["train_vars"]["dropout_p"]
-
-    self.embedding = torch.nn.Embedding(self.lang.vocab_size, self.emb_dim, padding_idx=self.lang.vocab2index["PADDING"])
-    if setting["paths"]["tgt_vocab_emb"] != None:
-      self.embedding.weight.data = torch.from_numpy(np.load(setting["paths"]["tgt_vocab_emb"])).float()
-
-    self.dropout = torch.nn.Dropout(self.dropout_p)
-    self.lstm = torch.nn.LSTM(self.emb_dim, self.model_dim, num_layers=self.num_layers, batch_first=True, dropout=self.dropout_p)
-    self.out = torch.nn.Linear(self.model_dim, self.lang.vocab_size)
-
-
-  def forward(self, input, dec_state, _encoder_outputs, _src_mask):
-    embedded = self.dropout(self.embedding(input))
-
-    output, (dec_state.hidden, dec_state.cell) = self.lstm(embedded, (dec_state.hidden, dec_state.cell)) # SLOW
-
-    output = self.out(output.squeeze(1))
-    output = torch.nn.functional.log_softmax(output, dim=1).squeeze(1)
-
-    return output
-
-
-
-class DecoderState:
-  def __init__(self, attention_type, hidden, cell=None):
-    self.hidden = hidden
-    self.cell = cell
-    if attention_type == "luong_general":
-      size = (hidden.size(1), hidden.size(2))
-      self.h_tilde = torch.zeros(size).to(device)
-    self.att_weights = None

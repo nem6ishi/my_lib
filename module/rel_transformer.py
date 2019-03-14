@@ -30,7 +30,7 @@ class PositionalEncoding(torch.nn.Module):
 
 
 class MultiHeadedAttention(torch.nn.Module):
-  def __init__(self, num_head, model_dim, dropout_p=0.1):
+  def __init__(self, num_head, model_dim, dropout_p=0.1, self_attn=False):
     super(MultiHeadedAttention, self).__init__()
 
     assert model_dim % num_head == 0
@@ -44,8 +44,13 @@ class MultiHeadedAttention(torch.nn.Module):
     self.final_linear = torch.nn.Linear(model_dim, model_dim)
     self.dropout = torch.nn.Dropout(dropout_p)
 
+    self.self_attn = self_attn
+    if self.self_attn:
+      self.k = 16
+      self.wv = torch.nn.Embedding(2*self.k+1, self.dim_per_head)
+      self.wk = torch.nn.Embedding(2*self.k+1, self.dim_per_head)
 
-  def forward(self, query, key, value, q_mask, kv_mask, use_subseq_mask=False, layer_cache=None):
+  def forward(self, query, key, value, q_mask, kv_mask, use_subseq_mask=False, time_step=0, layer_cache=None):
     batch_size = query.size(0)
 
     if layer_cache != None:
@@ -62,11 +67,12 @@ class MultiHeadedAttention(torch.nn.Module):
     query = self.linear_querys(query).view(batch_size, -1, self.num_head, self.dim_per_head).transpose(1, 2).masked_fill(q_mask_here, 0.0)
 
     kv_mask_here = kv_mask.unsqueeze(1).unsqueeze(-1).expand(-1, self.num_head, -1, self.dim_per_head)
+
     key = self.linear_keys(key).view(batch_size, -1, self.num_head, self.dim_per_head).transpose(1, 2).masked_fill(kv_mask_here, 0.0)
     value = self.linear_values(value).view(batch_size, -1, self.num_head, self.dim_per_head).transpose(1, 2).masked_fill(kv_mask_here, 0.0)
 
-    x, attn_weights = self.attention(query, key, value, kv_mask, use_subseq_mask)
-    x = x.transpose(1, 2).contiguous().view(batch_size, -1, self.num_head * self.dim_per_head)
+    x, attn_weights = self.attention(query, key, value, kv_mask, use_subseq_mask, time_step)
+    x = x.transpose(1, 2).contiguous().view(batch_size, -1, self.num_head * self.dim_per_head) # unite heads
     x = self.final_linear(x)
 
     q_mask_here = q_mask.unsqueeze(-1).expand(-1, -1, x.size(-1))
@@ -75,15 +81,47 @@ class MultiHeadedAttention(torch.nn.Module):
     return x, attn_weights
 
 
-  def attention(self, query, key, value, mask, use_subseq_mask=False):
-    scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(self.dim_per_head)
+  def attention(self, query, key, value, mask, use_subseq_mask=False, time_step=0):
+    if use_subseq_mask:
+      print(query.size())
+
+    if self.self_attn:
+      length = key.size(2)
+      pos = torch.LongTensor([list(range(-i, length-i)) for i in range(length)]).to(device)
+      k_mat = torch.ones(pos.size(), dtype=torch.long).to(device) * self.k
+      pos = torch.max(-k_mat, torch.min(k_mat, pos)) + self.k
+      if query.size(2) == 1:
+        pos = pos[time_step:time_step+1]
+
+    if self.self_attn:
+      ak = self.wk(pos)
+      rel_score = query.unsqueeze(-2).expand(-1,-1,-1,length,-1) * ak.unsqueeze(0).unsqueeze(0).expand(query.size(0), query.size(1), -1, -1, -1) # [b, h, q, v, dim]
+      rel_score = torch.sum(rel_score, dim=-1)
+
+      scores = torch.matmul(query, key.transpose(-2, -1)) + rel_score / math.sqrt(self.dim_per_head) # [b, h, q, v]
+    else:
+      scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(self.dim_per_head)
 
     mask = mask.unsqueeze(1).unsqueeze(1).expand(-1, scores.size(1), scores.size(2), -1)
     if use_subseq_mask:
       mask = self.get_subseq_mask(mask.size())
 
     attn_weights = torch.nn.functional.softmax(scores.masked_fill(mask, float('-inf')), dim = -1)
-    x = torch.matmul(self.dropout(attn_weights), value)
+
+    if self.self_attn:
+      print(attn_weights.size())
+      av = self.wv(pos)
+      rel_score = attn_weights.unsqueeze(-1) * av.unsqueeze(0).unsqueeze(0).expand(attn_weights.size(0), attn_weights.size(1), -1, -1, -1) # [b, h, q, v, dim]
+      rel_score = torch.sum(rel_score, dim=-3)
+
+      x = torch.matmul(attn_weights, value) + rel_score # [b, h, q, v]
+      print(x.size())
+      exit()
+    else:
+      x = torch.matmul(attn_weights, value)
+
+    if use_subseq_mask:
+      print(x.size())
     return x, attn_weights
 
 
@@ -110,7 +148,7 @@ class PositionwiseFeedForward(torch.nn.Module):
 class TransformerEncoderLayer(torch.nn.Module):
   def __init__(self, model_dim, num_head, ff_dim, dropout_p=0.1):
     super(TransformerEncoderLayer, self).__init__()
-    self.self_attn = MultiHeadedAttention(num_head, model_dim, dropout_p)
+    self.self_attn = MultiHeadedAttention(num_head, model_dim, dropout_p, self_attn=True)
     self.layer_norm1 = torch.nn.LayerNorm(model_dim, eps=1e-6)
     self.feed_forward = PositionwiseFeedForward(model_dim, ff_dim, dropout_p)
     self.layer_norm2 = torch.nn.LayerNorm(model_dim, eps=1e-6)
@@ -155,47 +193,11 @@ class TransformerEncoder(torch.nn.Module):
 
 
 
-class BidirectionalTransformerEncoder(torch.nn.Module):
-  def __init__(self, vocab_size, emb_dim, model_dim, ff_dim, num_layers, num_head, dropout_p=0.1, padding_idx=0):
-    super(BidirectionalTransformerEncoder, self).__init__()
-
-    self.vocab_size = vocab_size
-    self.emb_dim = emb_dim
-    self.model_dim =  model_dim
-    self.ff_dim = ff_dim
-    self.num_layers = num_layers
-    self.num_head = num_head
-
-    self.dropout_p = dropout_p
-
-    self.embedding = torch.nn.Embedding(self.vocab_size, self.emb_dim, padding_idx=padding_idx)
-    self.positinal_enc = PositionalEncoding(self.emb_dim, self.dropout_p)
-    self.ff = torch.nn.Linear(emb_dim*2, emb_dim)
-    self.layers = torch.nn.ModuleList([TransformerEncoderLayer(self.model_dim, self.num_head, self.ff_dim, self.dropout_p) for i in range(self.num_layers)])
-    self.dropout = torch.nn.Dropout(self.dropout_p)
-
-
-  def forward(self, input):
-    mask = (input==torch.zeros(input.size(), dtype=torch.long).to(device))
-    embedded = self.dropout(self.embedding(input)) # [B,T,H]
-
-    x1 = self.positinal_enc(embedded, mask)
-    x2 = self.positinal_enc(embedded, mask, tmp_reverse=True)
-    x = self.dropout(self.ff(torch.cat((x1,x2), -1)))
-
-    for layer in self.layers:
-      x = layer(x, mask)
-    return x
-
-
-
-
-
 class TransformerDecoderLayer(torch.nn.Module):
   def __init__(self, model_dim, num_head, ff_dim, dropout_p=0.1):
     super(TransformerDecoderLayer, self).__init__()
 
-    self.self_attn = MultiHeadedAttention(num_head, model_dim, dropout_p)
+    self.self_attn = MultiHeadedAttention(num_head, model_dim, dropout_p, self_attn=True)
     self.layer_norm1 = torch.nn.LayerNorm(model_dim, eps=1e-6)
     self.context_attn = MultiHeadedAttention(num_head, model_dim, dropout_p)
     self.layer_norm2 = torch.nn.LayerNorm(model_dim, eps=1e-6)
@@ -203,8 +205,8 @@ class TransformerDecoderLayer(torch.nn.Module):
     self.layer_norm3 = torch.nn.LayerNorm(model_dim, eps=1e-6)
     self.dropout = torch.nn.Dropout(dropout_p)
 
-  def forward(self, input, encoder_output, src_mask, tgt_mask, layer_cache=None):
-    attn_out, _ = self.self_attn(input, input, input, tgt_mask, tgt_mask, use_subseq_mask=True, layer_cache=layer_cache)
+  def forward(self, input, encoder_output, src_mask, tgt_mask, time_step=0,layer_cache=None):
+    attn_out, _ = self.self_attn(input, input, input, tgt_mask, tgt_mask, use_subseq_mask=True, time_step=time_step, layer_cache=layer_cache)
     out = self.layer_norm1(self.dropout(attn_out) + input)
 
     context_out, _ = self.context_attn(out, encoder_output, encoder_output, tgt_mask, src_mask)
@@ -240,7 +242,7 @@ class TransformerDecoder(torch.nn.Module):
     embedded = self.dropout(self.embedding(input))
     x = self.positinal_enc(embedded, tgt_mask, time_step=time_step)
     for i, layer in enumerate(self.layers):
-      x = layer(x, encoder_output, src_mask, tgt_mask,
+      x = layer(x, encoder_output, src_mask, tgt_mask, time_step=time_step,
                 layer_cache=layer_cache[i] if layer_cache!=None else None)
     return x
 
@@ -258,52 +260,3 @@ class TransformerGenerator(torch.nn.Module):
     output = self.out(input)
     output = torch.nn.functional.log_softmax(output, dim=-1)
     return output
-
-
-
-"""
-class TransformerDecoderBasedLanguageModelLayer(torch.nn.Module):
-  def __init__(self, model_dim, num_head, ff_dim, dropout_p):
-    super(TransformerDecoderBasedLanguageModelLayer, self).__init__()
-    self.self_attn = MultiHeadedAttention(num_head, model_dim, dropout_p)
-    self.layer_norm1 = torch.nn.LayerNorm(model_dim, eps=1e-6)
-    self.feed_forward = PositionwiseFeedForward(model_dim, ff_dim, dropout_p)
-    self.layer_norm3 = torch.nn.LayerNorm(model_dim, eps=1e-6)
-    self.dropout = torch.nn.Dropout(dropout_p)
-
-  def forward(self, input, tgt_mask):
-    attn_out, _ = self.self_attn(input, input, input, tgt_mask, tgt_mask, use_subseq_mask=True)
-    out = self.layer_norm1(self.dropout(attn_out) + input)
-    ff_out = self.feed_forward(out).masked_fill(tgt_mask.unsqueeze(-1).expand(-1, -1, out.size(-1)), 0.0)
-    out = self.layer_norm3(self.dropout(ff_out) + out)
-    return out
-
-
-
-class TransformerDecoderBasedLanguageModel(torch.nn.Module):
-  def __init__(self, vocab_size, emb_dim, model_dim, ff_dim, num_layers, num_head, dropout_p=0.1, padding_idx=0):
-    super(TransformerDecoderBasedLanguageModel, self).__init__()
-
-    self.vocab_size = vocab_size
-    self.emb_dim = emb_dim
-    self.model_dim =  model_dim
-    self.ff_dim = ff_dim
-    self.num_layers = num_layers
-    self.num_head = num_head
-
-    self.dropout_p = dropout_p
-
-    self.embedding = torch.nn.Embedding(self.vocab_size, self.emb_dim, padding_idx=padding_idx)
-    self.positinal_enc = PositionalEncoding(self.emb_dim, self.dropout_p)
-    self.layers = torch.nn.ModuleList([TransformerDecoderBasedLanguageModelLayer(self.model_dim, self.num_head, self.ff_dim, self.dropout_p) for i in range(self.num_layers)])
-    self.dropout = torch.nn.Dropout(self.dropout_p)
-
-
-  def forward(self, input):
-    tgt_mask = (input==torch.zeros(input.size(), dtype=torch.long).to(device))
-    embedded = self.dropout(self.embedding(input))
-    x = self.positinal_enc(embedded, tgt_mask)
-    for layer in self.layers:
-      x = layer(x, tgt_mask)
-    return x
-"""

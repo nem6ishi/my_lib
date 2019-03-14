@@ -1,33 +1,9 @@
 import sys, torch, copy, random
 
 sys.path.append("/home/neishi/workspace/my_lib")
-import module.transformer
+import module.rel_transformer
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
-"""
-class LanguageModel(torch.nn.Module):
-  def __init__(self, setting, tgt_lang):
-    super(LanguageModel, self).__init__()
-    self.tgt_lang = tgt_lang
-    self.decoder =  module.transformer.TransformerDecoderBasedLanguageModel(tgt_lang.vocab_size,
-                                                                            setting["decoder_vars"]["emb_dim"],
-                                                                            setting["decoder_vars"]["model_dim"],
-                                                                            setting["decoder_vars"]["ff_dim"],
-                                                                            setting["decoder_vars"]["num_layers"],
-                                                                            setting["decoder_vars"]["num_head"],
-                                                                            dropout_p=setting["train_vars"]["dropout_p"],
-                                                                            padding_idx=tgt_lang.vocab2index["PADDING"])
-    self.generator = module.transformer.TransformerGenerator(tgt_lang.vocab_size,
-                                                             setting["decoder_vars"]["model_dim"])
-
-
-  def decode(self, input):
-    decoder_output = self.decoder(input)
-    generator_output = self.generator(decoder_output)
-    return decoder_output, generator_output
-"""
 
 
 
@@ -35,7 +11,7 @@ class TransformerModel(torch.nn.Module):
   def __init__(self, setting, src_lang, tgt_lang):
     super(TransformerModel, self).__init__()
     self.src_lang, self.tgt_lang = src_lang, tgt_lang
-    self.encoder = module.transformer.TransformerEncoder(src_lang.vocab_size,
+    self.encoder = module.rel_transformer.TransformerEncoder(src_lang.vocab_size,
                                                          setting["encoder_vars"]["emb_dim"],
                                                          setting["encoder_vars"]["model_dim"],
                                                          setting["encoder_vars"]["ff_dim"],
@@ -44,7 +20,7 @@ class TransformerModel(torch.nn.Module):
                                                          dropout_p=setting["train_vars"]["dropout_p"],
                                                          padding_idx=src_lang.vocab2index["PADDING"])
 
-    self.decoder = module.transformer.TransformerDecoder(tgt_lang.vocab_size,
+    self.decoder = module.rel_transformer.TransformerDecoder(tgt_lang.vocab_size,
                                                          setting["decoder_vars"]["emb_dim"],
                                                          setting["decoder_vars"]["model_dim"],
                                                          setting["decoder_vars"]["ff_dim"],
@@ -53,7 +29,7 @@ class TransformerModel(torch.nn.Module):
                                                          dropout_p=setting["train_vars"]["dropout_p"],
                                                          padding_idx=src_lang.vocab2index["PADDING"])
 
-    self.generator = module.transformer.TransformerGenerator(tgt_lang.vocab_size,
+    self.generator = module.rel_transformer.TransformerGenerator(tgt_lang.vocab_size,
                                                              setting["decoder_vars"]["model_dim"])
 
     if setting["options"]["share_embedding"]:
@@ -298,7 +274,7 @@ class BidirectionalEncoderTransformerModel(TransformerModel):
   def __init__(self, setting, src_lang, tgt_lang):
     super(BidirectionalEncoderTransformerModel, self).__init__(setting, src_lang, tgt_lang)
     self.src_lang, self.tgt_lang = src_lang, tgt_lang
-    self.encoder = module.transformer.BidirectionalTransformerEncoder(src_lang.vocab_size,
+    self.encoder = module.rel_transformer.BidirectionalTransformerEncoder(src_lang.vocab_size,
                                                          setting["encoder_vars"]["emb_dim"],
                                                          setting["encoder_vars"]["model_dim"],
                                                          setting["encoder_vars"]["ff_dim"],
@@ -307,7 +283,7 @@ class BidirectionalEncoderTransformerModel(TransformerModel):
                                                          dropout_p=setting["train_vars"]["dropout_p"],
                                                          padding_idx=src_lang.vocab2index["PADDING"])
 
-    self.decoder = module.transformer.TransformerDecoder(tgt_lang.vocab_size,
+    self.decoder = module.rel_transformer.TransformerDecoder(tgt_lang.vocab_size,
                                                          setting["decoder_vars"]["emb_dim"],
                                                          setting["decoder_vars"]["model_dim"],
                                                          setting["decoder_vars"]["ff_dim"],
@@ -316,7 +292,7 @@ class BidirectionalEncoderTransformerModel(TransformerModel):
                                                          dropout_p=setting["train_vars"]["dropout_p"],
                                                          padding_idx=src_lang.vocab2index["PADDING"])
 
-    self.generator = module.transformer.TransformerGenerator(tgt_lang.vocab_size,
+    self.generator = module.rel_transformer.TransformerGenerator(tgt_lang.vocab_size,
                                                              setting["decoder_vars"]["model_dim"])
 
     if setting["options"]["share_embedding"]:
@@ -332,7 +308,7 @@ class FixedLengthTransformerLanguageModel(torch.nn.Module):
   def __init__(self, setting, tgt_lang):
     super(FixedLengthTransformerLanguageModel, self).__init__()
     self.tgt_lang = tgt_lang
-    self.decoder =  module.transformer.TransformerDecoderBasedLanguageModel(tgt_lang.vocab_size,
+    self.decoder =  module.rel_transformer.TransformerDecoderBasedLanguageModel(tgt_lang.vocab_size,
                                                                             setting["model_vars"]["emb_dim"],
                                                                             setting["model_vars"]["model_dim"],
                                                                             setting["model_vars"]["ff_dim"],
@@ -340,7 +316,7 @@ class FixedLengthTransformerLanguageModel(torch.nn.Module):
                                                                             setting["model_vars"]["num_head"],
                                                                             dropout_p=setting["train_vars"]["dropout_p"],
                                                                             padding_idx=tgt_lang.vocab2index["PADDING"])
-    self.generator = module.transformer.TransformerGenerator(tgt_lang.vocab_size,
+    self.generator = module.rel_transformer.TransformerGenerator(tgt_lang.vocab_size,
                                                              setting["model_vars"]["model_dim"])
     self.num_gram = setting["model_vars"]["num_gram"]
 

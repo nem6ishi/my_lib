@@ -2,47 +2,26 @@ import sys, torch, copy, random
 
 sys.path.append("/home/neishi/workspace/my_lib")
 import module.transformer
+import module.rnn
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-"""
-class LanguageModel(torch.nn.Module):
-  def __init__(self, setting, tgt_lang):
-    super(LanguageModel, self).__init__()
-    self.tgt_lang = tgt_lang
-    self.decoder =  module.transformer.TransformerDecoderBasedLanguageModel(tgt_lang.vocab_size,
-                                                                            setting["decoder_vars"]["emb_dim"],
-                                                                            setting["decoder_vars"]["model_dim"],
-                                                                            setting["decoder_vars"]["ff_dim"],
-                                                                            setting["decoder_vars"]["num_layers"],
-                                                                            setting["decoder_vars"]["num_head"],
-                                                                            dropout_p=setting["train_vars"]["dropout_p"],
-                                                                            padding_idx=tgt_lang.vocab2index["PADDING"])
-    self.generator = module.transformer.TransformerGenerator(tgt_lang.vocab_size,
-                                                             setting["decoder_vars"]["model_dim"])
 
-
-  def decode(self, input):
-    decoder_output = self.decoder(input)
-    generator_output = self.generator(decoder_output)
-    return decoder_output, generator_output
-"""
-
-
-
-class TransformerModel(torch.nn.Module):
+class Model(torch.nn.Module):
   def __init__(self, setting, src_lang, tgt_lang):
-    super(TransformerModel, self).__init__()
+    super(Model, self).__init__()
     self.src_lang, self.tgt_lang = src_lang, tgt_lang
-    self.encoder = module.transformer.TransformerEncoder(src_lang.vocab_size,
-                                                         setting["encoder_vars"]["emb_dim"],
-                                                         setting["encoder_vars"]["model_dim"],
-                                                         setting["encoder_vars"]["ff_dim"],
-                                                         setting["encoder_vars"]["num_layers"],
-                                                         setting["encoder_vars"]["num_head"],
-                                                         dropout_p=setting["train_vars"]["dropout_p"],
-                                                         padding_idx=src_lang.vocab2index["PADDING"])
+    self.encoder = module.rnn.EncoderRNN(src_lang.vocab_size,
+                                         setting["encoder_vars"]["emb_dim"],
+                                         setting["encoder_vars"]["model_dim"],
+                                         setting["encoder_vars"]["num_layers"],
+                                         setting["encoder_vars"]["bi_directional"],
+                                         dropout_p=setting["train_vars"]["dropout_p"],
+                                         padding_idx=src_lang.vocab2index["PADDING"])
+
+    self.encoder_num_directions = 2 if setting["encoder_vars"]["bi_directional"] else 1
+    self.bridge = torch.nn.Linear(setting["encoder_vars"]["model_dim"]*self.encoder_num_directions, setting["decoder_vars"]["model_dim"])
 
     self.decoder = module.transformer.TransformerDecoder(tgt_lang.vocab_size,
                                                          setting["decoder_vars"]["emb_dim"],
@@ -64,9 +43,9 @@ class TransformerModel(torch.nn.Module):
 
 
 
-  def encode(self, input):
-    return self.encoder(input)
-
+  def encode(self, batch):
+    outputs, hidden = self.encoder(batch)
+    return self.bridge(outputs)
 
 
   def decode_for_train(self, tgt_sent, encoder_outputs, src_mask):
@@ -117,7 +96,6 @@ class TransformerModel(torch.nn.Module):
 
 
 
-
   def beam_search_decode(self, outputs, src_mask, max_target_length, beam_size):
     batch_size = outputs.size(0)
     assert batch_size == 1
@@ -145,7 +123,7 @@ class TransformerModel(torch.nn.Module):
           index[j] = self.tgt_lang.vocab2index["PADDING"]
         else:
           dec_state.lengths[j] += 1
-
+          
       scores = self.calc_score(probs, dec_state.lengths, dec_state.reached_end)
       scores, sort_indexes = scores.view(beam_size*beam_size, -1).sort(0, descending=True)
 
@@ -199,9 +177,8 @@ class TransformerModel(torch.nn.Module):
     return scores
 
 
-
   def optimal_beam_search_decode(self, outputs, src_mask, max_target_length, beam_size):
-    hyperparam_r = 1.6
+    hyperparam_r = 1.8
     ratio = 1.17 # from aspec sp16k dev
 
     src_sent_len = float(src_mask.size(1))
@@ -272,11 +249,10 @@ class TransformerModel(torch.nn.Module):
       if all(dec_state.reached_end):
         break
       elif best_score >= dec_state.probs[0] + hyperparam_r * ratio*src_sent_len:
-          #print(best_score, dec_state.probs[0] + hyperparam_r * ratio*src_sent_len, dec_state.probs[0], hyperparam_r, ratio, src_sent_len, flush=True)
-          return best_word_output.unsqueeze(0), None
+        print(best_score, dec_state.probs[0] + hyperparam_r * ratio*src_sent_len, dec_state.probs[0], hyperparam_r, ratio, src_sent_len, flush=True)
+        return best_word_output.unsqueeze(0), None
 
     return decoder_word_outputs[0].unsqueeze(0), None
-
 
 
 
@@ -288,89 +264,3 @@ class beam_search_state:
     self.reached_end = [False for i in range(self.beam_size)]
     self.lengths = [1 for i in range(self.beam_size)]
     self.decoder_word_outputs = decoder_word_outputs
-
-
-
-
-
-"""
-class BidirectionalEncoderTransformerModel(TransformerModel):
-  def __init__(self, setting, src_lang, tgt_lang):
-    super(BidirectionalEncoderTransformerModel, self).__init__(setting, src_lang, tgt_lang)
-    self.src_lang, self.tgt_lang = src_lang, tgt_lang
-    self.encoder = module.transformer.BidirectionalTransformerEncoder(src_lang.vocab_size,
-                                                         setting["encoder_vars"]["emb_dim"],
-                                                         setting["encoder_vars"]["model_dim"],
-                                                         setting["encoder_vars"]["ff_dim"],
-                                                         setting["encoder_vars"]["num_layers"],
-                                                         setting["encoder_vars"]["num_head"],
-                                                         dropout_p=setting["train_vars"]["dropout_p"],
-                                                         padding_idx=src_lang.vocab2index["PADDING"])
-
-    self.decoder = module.transformer.TransformerDecoder(tgt_lang.vocab_size,
-                                                         setting["decoder_vars"]["emb_dim"],
-                                                         setting["decoder_vars"]["model_dim"],
-                                                         setting["decoder_vars"]["ff_dim"],
-                                                         setting["decoder_vars"]["num_layers"],
-                                                         setting["decoder_vars"]["num_head"],
-                                                         dropout_p=setting["train_vars"]["dropout_p"],
-                                                         padding_idx=src_lang.vocab2index["PADDING"])
-
-    self.generator = module.transformer.TransformerGenerator(tgt_lang.vocab_size,
-                                                             setting["decoder_vars"]["model_dim"])
-
-    if setting["options"]["share_embedding"]:
-      if src_lang.path == tgt_lang.path:
-        self.decoder.embedding = self.encoder.embedding
-      else:
-        raise
-
-
-
-
-class FixedLengthTransformerLanguageModel(torch.nn.Module):
-  def __init__(self, setting, tgt_lang):
-    super(FixedLengthTransformerLanguageModel, self).__init__()
-    self.tgt_lang = tgt_lang
-    self.decoder =  module.transformer.TransformerDecoderBasedLanguageModel(tgt_lang.vocab_size,
-                                                                            setting["model_vars"]["emb_dim"],
-                                                                            setting["model_vars"]["model_dim"],
-                                                                            setting["model_vars"]["ff_dim"],
-                                                                            setting["model_vars"]["num_layers"],
-                                                                            setting["model_vars"]["num_head"],
-                                                                            dropout_p=setting["train_vars"]["dropout_p"],
-                                                                            padding_idx=tgt_lang.vocab2index["PADDING"])
-    self.generator = module.transformer.TransformerGenerator(tgt_lang.vocab_size,
-                                                             setting["model_vars"]["model_dim"])
-    self.num_gram = setting["model_vars"]["num_gram"]
-
-
-  def predict_for_training(self, input):
-    batch_size = input.size(0)
-    length = input.size(1)
-
-    prob_outputs = torch.zeros((batch_size, length, self.tgt_lang.vocab_size), dtype=torch.float).to(device)
-
-    #backward
-    reverse_idx = list(range(length))
-    reverse_idx.reverse()
-    input = input[:, reverse_idx]
-
-    for i in range(length):
-      if i==0:
-        input_for_lang_model = torch.zeros((batch_size, self.num_gram), dtype=torch.long).to(device)
-      elif i < self.num_gram:
-        padding = torch.zeros((batch_size, self.num_gram-i), dtype=torch.long).to(device)
-        input_slice = input[:, :i]
-        input_for_lang_model = torch.cat((padding, input_slice), 1)
-      else:
-        input_for_lang_model = input[:, i-self.num_gram:i]
-
-      decoder_output = self.decoder(input_for_lang_model)
-      prob_output = self.generator(decoder_output[:, -1])
-      prob_outputs[:, i] = prob_output
-
-    prob_outputs = prob_outputs[:, reverse_idx] #backward
-
-    return prob_outputs
-"""

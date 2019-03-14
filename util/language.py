@@ -1,7 +1,7 @@
 import os
 
-special_vocabs = ["PADDING", "MASK", "UNK", "SEQUENCE_START", "SEQUENCE_END"]
-
+#special_vocabs = ["PADDING", "MASK", "UNK", "SEQUENCE_START", "SEQUENCE_END"]
+special_vocabs = ["PADDING", "UNK", "SEQUENCE_START", "SEQUENCE_END"]
 
 class Lang:
   def __init__(self, path):

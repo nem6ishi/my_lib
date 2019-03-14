@@ -25,6 +25,7 @@ class SingleCorpus:
     if self.max_length > 0:
       with open(self.file_path, "r", encoding='utf-8') as file:
         for i, sent in enumerate(file):
+          assert "　" not in sent
           if self.num_imort_line == i:
             break
           len_sent = sent.count(' ') + 1
@@ -70,6 +71,9 @@ class ParallelCorpus:
     self.max_length = 0 # this will be updated when importing
     self.num_imort_line = num_imort_line
 
+    self.src_lang = src_lang
+    self.tgt_lang = tgt_lang
+
     self.src_corpus = SingleCorpus(src_lang, src_file_path, max_length, self.num_imort_line)
     if self.share_corpus or tgt_file_path == None : # None for test time in which no tgt_corpus
       self.tgt_corpus = self.src_corpus
@@ -100,8 +104,10 @@ class ParallelCorpus:
 
 
 class SingleBatch:
-  def __init__(self, corpus, fixed_batch_size):
+  def __init__(self, corpus, fixed_batch_size, num_cat_sent=1):
     self.fixed_batch_size = fixed_batch_size
+    self.num_cat_sent = num_cat_sent # param to concatenate 2 or more sentences as one
+    self.enable_cat = False
     self.batch_size = 0
     self.corpus = corpus
     self.sample_idxs = []
@@ -111,10 +117,13 @@ class SingleBatch:
 
 
   def generate_random_indexes(self):
-    self.sample_idxs = numpy.random.randint(0, self.corpus.corpus_size, self.fixed_batch_size)
+    self.enable_cat = True if self.num_cat_sent>1 else False
+    self.sample_idxs = numpy.random.randint(0, self.corpus.corpus_size, self.fixed_batch_size*self.num_cat_sent)
 
 
   def generate_sequential_indexes(self, num_iter):
+    self.enable_cat = False
+
     num_done = self.fixed_batch_size * num_iter
     num_rest = self.corpus.corpus_size - num_done
     if num_rest < self.fixed_batch_size:
@@ -124,56 +133,54 @@ class SingleBatch:
     self.sample_idxs = list(range(num_done, num_done+batch_size))
 
 
-  def add_padding_and_prepare_mask(self):
-    max_length = max(self.lengths)
-    for sent, length in zip(self.sentences, self.lengths):
-      pad_len = max_length - length
-      pad = [self.corpus.lang.vocab2index["PADDING"] for i in range(pad_len)]
-      sent += pad
-      mask = [0 for i in range(length)] + [1 for i in range(pad_len)]
-      self.masks.append(mask)
-
-
   def generate_batch(self, reverse=False):
     self.sentences = []
     self.lengths = []
-    self.masks = []
     self.batch_size = len(self.sample_idxs)
     self.corpus.convert_into_indexes(self.sample_idxs)
 
+    sent = []
+    length = 0
     for i, idx in enumerate(self.sample_idxs):
-      sent = copy.deepcopy(self.corpus.sentences[idx])
-      if reverse:
-        sent.reverse()
-      self.sentences.append(sent)
-      self.lengths.append(self.corpus.lengths[idx])
-    self.add_padding_and_prepare_mask()
+      sent += copy.deepcopy(self.corpus.sentences[idx])
+      length += self.corpus.lengths[idx]
 
-    self.sentences = torch.LongTensor(self.sentences).to(device)
-    self.masks = torch.ByteTensor(self.masks).to(device)
+      if (i+1)%self.num_cat_sent==0 or not self.enable_cat:
+        if reverse:
+          sent.reverse()
+        self.sentences.append(torch.LongTensor(sent).to(device))
+        self.lengths.append(length)
+        sent = []
+        length = 0
+
+    self.sentences = torch.nn.utils.rnn.pad_sequence(self.sentences,
+                                                     batch_first=True,
+                                                     padding_value=self.corpus.lang.vocab2index["PADDING"])
+    self.masks = (self.sentences == torch.zeros(self.sentences.size(), dtype=torch.long).to(device))
 
 
 
 class ParallelBatch:
-  def __init__(self, parallel_corpus, fixed_batch_size):
+  def __init__(self, parallel_corpus, fixed_batch_size, num_cat_sent=1):
     self.fixed_batch_size = fixed_batch_size
     self.src_corpus = parallel_corpus.src_corpus
     self.tgt_corpus = parallel_corpus.tgt_corpus
     self.batch_size = 0
 
-    self.src_batch = SingleBatch(self.src_corpus, self.fixed_batch_size)
-    self.tgt_batch = SingleBatch(self.tgt_corpus, self.fixed_batch_size)
+    self.src_batch = SingleBatch(self.src_corpus, self.fixed_batch_size, num_cat_sent)
+    self.tgt_batch = SingleBatch(self.tgt_corpus, self.fixed_batch_size, num_cat_sent)
 
 
   def generate_random_indexes(self):
     self.src_batch.generate_random_indexes()
     self.tgt_batch.sample_idxs = self.src_batch.sample_idxs
+    self.tgt_batch.enable_cat = self.src_batch.enable_cat
 
 
   def generate_sequential_indexes(self, num_iter):
     self.src_batch.generate_sequential_indexes(num_iter)
     self.tgt_batch.sample_idxs = self.src_batch.sample_idxs
-
+    self.tgt_batch.enable_cat = self.src_batch.enable_cat
 
   def generate_batch(self, src_reverse=False, tgt_reverse=False):
     self.src_batch.generate_batch(src_reverse)

@@ -47,3 +47,8 @@ class LanguageModel(torch.nn.Module):
     prob_outputs = prob_outputs[:, reverse_idx] #backward
 
     return prob_outputs
+
+
+  def predict(self, input):
+    assert input.size(1) == self.num_gram
+    return self.lang_model(input)
