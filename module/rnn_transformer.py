@@ -6,7 +6,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class MultiHeadedAttention(torch.nn.Module):
-  def __init__(self, num_head, model_dim, dropout_p=0.1):
+  def __init__(self, num_head, model_dim):
     super(MultiHeadedAttention, self).__init__()
 
     assert model_dim % num_head == 0
@@ -18,7 +18,6 @@ class MultiHeadedAttention(torch.nn.Module):
     self.linear_values = torch.nn.Linear(model_dim, num_head * self.dim_per_head)
     self.linear_querys = torch.nn.Linear(model_dim, num_head * self.dim_per_head)
     self.final_linear = torch.nn.Linear(model_dim, model_dim)
-    self.dropout = torch.nn.Dropout(dropout_p)
 
 
   def forward(self, query, key, value, q_mask, kv_mask, use_subseq_mask=False, layer_cache=None):
@@ -59,7 +58,7 @@ class MultiHeadedAttention(torch.nn.Module):
       mask = self.get_subseq_mask(mask.size())
 
     attn_weights = torch.nn.functional.softmax(scores.masked_fill(mask, float('-inf')), dim = -1)
-    x = torch.matmul(self.dropout(attn_weights), value)
+    x = torch.matmul(attn_weights, value)
     return x, attn_weights
 
 
@@ -86,7 +85,7 @@ class PositionwiseFeedForward(torch.nn.Module):
 class TransformerEncoderLayer(torch.nn.Module):
   def __init__(self, model_dim, num_head, ff_dim, dropout_p=0.1):
     super(TransformerEncoderLayer, self).__init__()
-    self.self_attn = MultiHeadedAttention(num_head, model_dim, dropout_p)
+    self.self_attn = MultiHeadedAttention(num_head, model_dim)
     self.layer_norm1 = torch.nn.LayerNorm(model_dim, eps=1e-6)
     self.feed_forward = PositionwiseFeedForward(model_dim, ff_dim, dropout_p)
     self.layer_norm2 = torch.nn.LayerNorm(model_dim, eps=1e-6)
@@ -107,7 +106,7 @@ class RNNTransformerEncoder(torch.nn.Module):
 
     self.vocab_size = vocab_size
     self.emb_dim = emb_dim
-    self.model_dim =  model_dim
+    self.model_dim = model_dim
     self.ff_dim = ff_dim
     self.num_layers = num_layers
     self.num_head = num_head
@@ -117,7 +116,6 @@ class RNNTransformerEncoder(torch.nn.Module):
     self.embedding = torch.nn.Embedding(self.vocab_size, self.emb_dim, padding_idx=padding_idx)
     self.rnn = torch.nn.GRU(self.emb_dim, self.model_dim, num_layers=1, batch_first=True, bidirectional=True)
     self.ff = torch.nn.Linear(self.model_dim*2, self.model_dim)
-    self.layer_norm = torch.nn.LayerNorm(model_dim, eps=1e-6)
     self.layers = torch.nn.ModuleList([TransformerEncoderLayer(self.model_dim, self.num_head, self.ff_dim, self.dropout_p) for i in range(self.num_layers)])
     self.dropout = torch.nn.Dropout(self.dropout_p)
 
@@ -126,12 +124,10 @@ class RNNTransformerEncoder(torch.nn.Module):
     mask = (input==torch.zeros(input.size(), dtype=torch.long).to(device))
     embedded = self.dropout(self.embedding(input)) # [B,T,H]
 
-    x, _hidden = self.rnn(embedded)
+    x, _hidden = self.rnn(embedded) #bi-directional
     x = self.ff(x)
     mask_here = mask.unsqueeze(-1).expand(-1, -1, x.size(-1))
     x = x.masked_fill(mask_here, 0.0)
-
-    #x = self.layer_norm(self.dropout(x) + embedded)
 
     for layer in self.layers:
       x = layer(x, mask)
@@ -144,9 +140,9 @@ class TransformerDecoderLayer(torch.nn.Module):
   def __init__(self, model_dim, num_head, ff_dim, dropout_p=0.1):
     super(TransformerDecoderLayer, self).__init__()
 
-    self.self_attn = MultiHeadedAttention(num_head, model_dim, dropout_p)
+    self.self_attn = MultiHeadedAttention(num_head, model_dim)
     self.layer_norm1 = torch.nn.LayerNorm(model_dim, eps=1e-6)
-    self.context_attn = MultiHeadedAttention(num_head, model_dim, dropout_p)
+    self.context_attn = MultiHeadedAttention(num_head, model_dim)
     self.layer_norm2 = torch.nn.LayerNorm(model_dim, eps=1e-6)
     self.feed_forward = PositionwiseFeedForward(model_dim, ff_dim, dropout_p)
     self.layer_norm3 = torch.nn.LayerNorm(model_dim, eps=1e-6)
@@ -180,7 +176,6 @@ class RNNTransformerDecoder(torch.nn.Module):
 
     self.embedding = torch.nn.Embedding(self.vocab_size, self.emb_dim, padding_idx=padding_idx)
     self.rnn = torch.nn.GRU(self.emb_dim, self.model_dim, num_layers=1, batch_first=True, bidirectional=False)
-    self.layer_norm = torch.nn.LayerNorm(model_dim, eps=1e-6)
     self.layers = torch.nn.ModuleList([TransformerDecoderLayer(self.model_dim, self.num_head, self.ff_dim, self.dropout_p) for i in range(self.num_layers)])
     self.dropout = torch.nn.Dropout(self.dropout_p)
 
@@ -196,8 +191,6 @@ class RNNTransformerDecoder(torch.nn.Module):
 
     mask_here = tgt_mask.unsqueeze(-1).expand(-1, -1, x.size(-1))
     x = x.masked_fill(mask_here, 0.0)
-
-    #x = self.layer_norm(self.dropout(x) + embedded)
 
     for i, layer in enumerate(self.layers):
       x = layer(x, encoder_output, src_mask, tgt_mask,

@@ -17,8 +17,8 @@ def apply_sp(file_path, use_kytea=False):
     for line in file:
       line = line.strip()
       line = remove_sp_marker(line) + "\n"
-      if use_kytea:
-        line = line.replace(" ", "")
+      #if use_kytea:
+      #  line = line.replace(" ", "")
       text += line
   with open(file_path, "w") as file:
     file.write(text)
@@ -26,6 +26,15 @@ def apply_sp(file_path, use_kytea=False):
 
 
 def apply_kytea(file_path):
+  text = ""
+  with open(file_path, "r") as file:
+    for line in file:
+      line = line.strip() + "\n"
+      line = line.replace(" ", "")
+      text += line
+  with open(file_path, "w") as file:
+    file.write(text)
+
   with open(file_path, "r") as read:
     kytea_cmd = ["kytea", "-out", "tok"]
     kytea_out = subprocess.check_output(kytea_cmd, stdin=read, stderr=subprocess.STDOUT)

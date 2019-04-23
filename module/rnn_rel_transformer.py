@@ -19,11 +19,7 @@ class PositionalEncoding(torch.nn.Module):
     self.register_buffer('pe', pe)
 
   def forward(self, x, mask, time_step=0, tmp_reverse=False):
-    if tmp_reverse:
-      x = x[:, list(range(x.size(1)-1,-1,-1))]
     x = x + self.pe[:, time_step:time_step+x.size(1)]
-    if tmp_reverse:
-      x = x[:, list(range(x.size(1)-1,-1,-1))]
     x.masked_fill_(mask.unsqueeze(-1).expand(-1, -1, x.size(-1)), 0.0)
     return self.dropout(x)
 
@@ -86,15 +82,12 @@ class MultiHeadedAttention(torch.nn.Module):
       pos = torch.LongTensor([list(range(-i, length-i)) for i in range(length)]).to(device)
       k_mat = torch.ones(pos.size(), dtype=torch.long).to(device) * self.k
       pos = torch.max(-k_mat, torch.min(k_mat, pos)) + self.k
+      print(time_step, query.size(2))
       pos = pos[time_step:time_step+query.size(2)]
 
     if self.self_attn:
       ak = self.wk(pos) # [q, v, dim]
-
-      #rel_score = query.unsqueeze(-2).expand(-1,-1,-1,length,-1) * ak.unsqueeze(0).unsqueeze(0).expand(query.size(0), query.size(1), -1, -1, -1) # [b, h, q, v, dim]
-      #rel_score = torch.sum(rel_score, dim=-1) # [b, h, q, v]
       rel_score = torch.einsum('bhqd,qvd->bhqv', (query, ak))
-
       scores = (torch.matmul(query, key.transpose(-2, -1)) + rel_score) / math.sqrt(self.dim_per_head) # [b, h, q, v]
     else:
       scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(self.dim_per_head)
@@ -107,11 +100,7 @@ class MultiHeadedAttention(torch.nn.Module):
 
     if self.self_attn:
       av = self.wv(pos) # [q, v, dim]
-
-      #rel_score = attn_weights.unsqueeze(-1).expand(-1,-1,-1,length,-1) * av.unsqueeze(0).unsqueeze(0).expand(attn_weights.size(0), attn_weights.size(1), -1, -1, -1) # [b, h, q, v, dim]
-      #rel_score = torch.sum(rel_score, dim=-2) # [b, h, q, dim] ; part of context vector
       rel_score = torch.einsum('bhqv,qvd->bhqd', (attn_weights, av))
-
       x = torch.matmul(attn_weights, value) + rel_score # [b, h, q, dim]
     else:
       x = torch.matmul(attn_weights, value)
@@ -163,7 +152,7 @@ class TransformerEncoder(torch.nn.Module):
 
     self.vocab_size = vocab_size
     self.emb_dim = emb_dim
-    self.model_dim =  model_dim
+    self.model_dim = model_dim
     self.ff_dim = ff_dim
     self.num_layers = num_layers
     self.num_head = num_head
@@ -171,7 +160,8 @@ class TransformerEncoder(torch.nn.Module):
     self.dropout_p = dropout_p
 
     self.embedding = torch.nn.Embedding(self.vocab_size, self.emb_dim, padding_idx=padding_idx)
-    self.positinal_enc = PositionalEncoding(self.emb_dim, self.dropout_p)
+    self.rnn = torch.nn.GRU(self.emb_dim, self.model_dim, num_layers=1, batch_first=True, bidirectional=True)
+    self.ff = torch.nn.Linear(self.model_dim*2, self.model_dim)
     self.layers = torch.nn.ModuleList([TransformerEncoderLayer(self.model_dim, self.num_head, self.ff_dim, self.dropout_p) for i in range(self.num_layers)])
     self.dropout = torch.nn.Dropout(self.dropout_p)
 
@@ -179,9 +169,15 @@ class TransformerEncoder(torch.nn.Module):
   def forward(self, input):
     mask = (input==torch.zeros(input.size(), dtype=torch.long).to(device))
     embedded = self.dropout(self.embedding(input)) # [B,T,H]
-    x = self.positinal_enc(embedded, mask)
+
+    x, _hidden = self.rnn(embedded) #bi-directional
+    x = self.ff(x)
+    mask_here = mask.unsqueeze(-1).expand(-1, -1, x.size(-1))
+    x = x.masked_fill(mask_here, 0.0)
+
     for layer in self.layers:
       x = layer(x, mask)
+
     return x
 
 
@@ -226,19 +222,24 @@ class TransformerDecoder(torch.nn.Module):
     self.dropout_p = dropout_p
 
     self.embedding = torch.nn.Embedding(self.vocab_size, self.emb_dim, padding_idx=padding_idx)
-    self.positinal_enc = PositionalEncoding(self.emb_dim, self.dropout_p)
+    self.rnn = torch.nn.GRU(self.emb_dim, self.model_dim, num_layers=1, batch_first=True, bidirectional=False)
     self.layers = torch.nn.ModuleList([TransformerDecoderLayer(self.model_dim, self.num_head, self.ff_dim, self.dropout_p) for i in range(self.num_layers)])
     self.dropout = torch.nn.Dropout(self.dropout_p)
 
 
-  def forward(self, input, encoder_output, src_mask, time_step=0, layer_cache=None):
+  def forward(self, input, encoder_output, src_mask, time_step=0, layer_cache=None, hidden=None):
     tgt_mask = (input == torch.zeros(input.size(), dtype=torch.long).to(device))
     embedded = self.dropout(self.embedding(input))
-    x = self.positinal_enc(embedded, tgt_mask, time_step=time_step)
+
+    if torch.is_tensor(hidden):
+      x, hidden = self.rnn(embedded, hidden)
+    else:
+      x, hidden = self.rnn(embedded)
+
     for i, layer in enumerate(self.layers):
       x = layer(x, encoder_output, src_mask, tgt_mask, time_step=time_step,
                 layer_cache=layer_cache[i] if layer_cache!=None else None)
-    return x
+    return x, hidden
 
 
 

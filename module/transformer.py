@@ -42,7 +42,6 @@ class MultiHeadedAttention(torch.nn.Module):
     self.linear_values = torch.nn.Linear(model_dim, num_head * self.dim_per_head)
     self.linear_querys = torch.nn.Linear(model_dim, num_head * self.dim_per_head)
     self.final_linear = torch.nn.Linear(model_dim, model_dim)
-    self.dropout = torch.nn.Dropout(dropout_p)
 
 
   def forward(self, query, key, value, q_mask, kv_mask, use_subseq_mask=False, layer_cache=None):
@@ -83,7 +82,7 @@ class MultiHeadedAttention(torch.nn.Module):
       mask = self.get_subseq_mask(mask.size())
 
     attn_weights = torch.nn.functional.softmax(scores.masked_fill(mask, float('-inf')), dim = -1)
-    x = torch.matmul(self.dropout(attn_weights), value)
+    x = torch.matmul(attn_weights, value)
     return x, attn_weights
 
 

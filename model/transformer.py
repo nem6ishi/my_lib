@@ -69,7 +69,7 @@ class TransformerModel(torch.nn.Module):
 
 
 
-  def decode_for_train(self, tgt_sent, encoder_outputs, src_mask):
+  def decode_for_training(self, tgt_sent, encoder_outputs, src_mask):
     decoder_output = self.decoder(tgt_sent, encoder_outputs, src_mask)
     decoder_prob_outputs = self.generator(decoder_output)
     return decoder_prob_outputs
