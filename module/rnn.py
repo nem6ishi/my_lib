@@ -44,7 +44,7 @@ class FixedLengthRnnLanguageModel(torch.nn.Module):
 
 
 class EncoderRNN(torch.nn.Module):
-  def __init__(self, vocab_size, emb_dim, model_dim, num_layers, bi_directional=False, dropout_p=0.1, padding_idx=0, reverse_input=False):
+  def __init__(self, vocab_size, emb_dim, model_dim, num_layers, bi_directional, decoder_model_dim, decoder_num_layers, dropout_p=0.1, padding_idx=0, reverse_input=False):
     super(EncoderRNN, self).__init__()
 
     self.vocab_size = vocab_size
@@ -54,12 +54,22 @@ class EncoderRNN(torch.nn.Module):
     self.bi_directional = bi_directional
     self.n_directions = 2 if self.bi_directional else 1
 
+    self.decoder_num_layers = decoder_num_layers
+    self.decoder_model_dim = decoder_model_dim
+
     self.dropout_p = dropout_p
     self.reverse_input = reverse_input
 
     self.embedding = torch.nn.Embedding(self.vocab_size, self.emb_dim, padding_idx=padding_idx)
     self.lstm = torch.nn.LSTM(self.emb_dim, self.model_dim, self.num_layers, batch_first=True, dropout=self.dropout_p, bidirectional=self.bi_directional)
     self.dropout = torch.nn.Dropout(self.dropout_p)
+
+    if (not self.bi_directional) and (self.num_layers == self.decoder_num_layers) and (self.model_dim == self.decoder_model_dim):
+      self.need_transform = False
+    else:
+      self.need_transform = True
+      self.linear_hidden = torch.nn.Linear(self.num_layers*self.model_dim*self.n_directions, self.decoder_num_layers*self.decoder_model_dim)
+      self.linear_cell = torch.nn.Linear(self.num_layers*self.model_dim*self.n_directions, self.decoder_num_layers*self.decoder_model_dim)
 
 
   def forward(self, batch):
@@ -74,10 +84,28 @@ class EncoderRNN(torch.nn.Module):
     embedded = torch.nn.utils.rnn.pack_padded_sequence(embedded, batch.lengths, batch_first=True) # form matrix into list, to care paddings in rnn
     outputs, (hidden, cell) = self.lstm(embedded)
     outputs, _ = torch.nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True) # reform into matrix
+    (hidden, cell) = self.linear_transform_for_decoder_hidden(hidden, cell)
 
     outputs, hidden, cell = self.resort(sort_indexes, batch, outputs, hidden, cell)
 
     return outputs, (hidden, cell)
+
+
+  def linear_transform_for_decoder_hidden(self, hidden, cell):
+    if not self.need_transform:
+      return (hidden, cell)
+
+    batch_size = hidden.size(1)
+
+    hidden = hidden.transpose(0, 1).contiguous().view(batch_size, -1)
+    hidden = torch.tanh(self.linear_hidden(hidden))
+    hidden = hidden.view(batch_size, self.decoder_num_layers, self.decoder_model_dim).transpose(0, 1).contiguous()
+
+    cell = cell.transpose(0, 1).contiguous().view(batch_size, -1)
+    cell = torch.tanh(self.linear_cell(cell))
+    cell = cell.view(batch_size, self.decoder_num_layers, self.decoder_model_dim).transpose(0, 1).contiguous()
+
+    return (hidden, cell)
 
 
   def sort(self, batch):
@@ -204,7 +232,7 @@ class OldEncoderRNN(torch.nn.Module):
     self.n_directions = 2 if self.bi_directional else 1
 
     self.decoder_num_layers = setting["decoder_vars"]["num_layers"]
-    self.decoder_hidden_size = setting["decoder_vars"]["hidden_size"]
+    self.decoder_model_dim = setting["decoder_vars"]["hidden_size"]
     self.dropout_p = setting["train_vars"]["dropout_p"]
 
     self.embedding = torch.nn.Embedding(self.lang.vocab_size, self.emb_size, padding_idx=self.lang.vocab2index["PADDING"])
@@ -214,12 +242,12 @@ class OldEncoderRNN(torch.nn.Module):
     self.dropout = torch.nn.Dropout(self.dropout_p)
     self.lstm = torch.nn.LSTM(self.emb_size, self.hidden_size, self.n_layers, batch_first=True, dropout=self.dropout_p, bidirectional=self.bi_directional)
 
-    if (not self.bi_directional) and (self.n_layers == self.decoder_num_layers) and (self.hidden_size == self.decoder_hidden_size):
+    if (not self.bi_directional) and (self.n_layers == self.decoder_num_layers) and (self.hidden_size == self.decoder_model_dim):
       self.need_transform = False
     else:
       self.need_transform = True
-      self.linear_hidden = torch.nn.Linear(self.n_layers*self.hidden_size*self.n_directions, self.decoder_num_layers*self.decoder_hidden_size)
-      self.linear_cell = torch.nn.Linear(self.n_layers*self.hidden_size*self.n_directions, self.decoder_num_layers*self.decoder_hidden_size)
+      self.linear_hidden = torch.nn.Linear(self.n_layers*self.hidden_size*self.n_directions, self.decoder_num_layers*self.decoder_model_dim)
+      self.linear_cell = torch.nn.Linear(self.n_layers*self.hidden_size*self.n_directions, self.decoder_num_layers*self.decoder_model_dim)
 
 
   def forward(self, batch):
@@ -249,11 +277,11 @@ class OldEncoderRNN(torch.nn.Module):
 
     hidden = hidden.transpose(0, 1).contiguous().view(batch_size, -1)
     hidden = torch.tanh(self.linear_hidden(hidden))
-    hidden = hidden.view(batch_size, self.decoder_num_layers, self.decoder_hidden_size).transpose(0, 1).contiguous()
+    hidden = hidden.view(batch_size, self.decoder_num_layers, self.decoder_model_dim).transpose(0, 1).contiguous()
 
     cell = cell.transpose(0, 1).contiguous().view(batch_size, -1)
     cell = torch.tanh(self.linear_cell(cell))
-    cell = cell.view(batch_size, self.decoder_num_layers, self.decoder_hidden_size).transpose(0, 1).contiguous()
+    cell = cell.view(batch_size, self.decoder_num_layers, self.decoder_model_dim).transpose(0, 1).contiguous()
 
     return (hidden, cell)
 

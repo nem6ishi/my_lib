@@ -111,7 +111,7 @@ class Processor:
       self.dev_corpus.import_file()
       logger.info("dev corpus size: {}".format(self.dev_corpus.corpus_size))
 
-    if "src_test" in self.setting["paths"] and "tgt_test" in self.setting["paths"]:
+    if "src_test" in self.setting["paths"]:
       logger.info("Loading test corpus")
       self.test_corpus = util.corpus.ParallelCorpus(self.src_lang,
                                                     self.tgt_lang,
@@ -124,7 +124,9 @@ class Processor:
   def select_model(self):
     if self.setting["train_vars"]["model_type"] == "transformer":
       self.model = model.transformer.TransformerModel(self.setting, self.src_lang, self.tgt_lang).to(device)
-      """elif self.setting["train_vars"]["model_type"] == "transformer":
+    elif self.setting["train_vars"]["model_type"] == "seq2seq":
+      self.model = model.seq2seq.Seq2SeqModel(self.setting, self.src_lang, self.tgt_lang).to(device)
+      """
       elif self.setting["train_vars"]["model_type"] == "transformer":
       elif self.setting["train_vars"]["model_type"] == "transformer":
       elif self.setting["train_vars"]["model_type"] == "transformer":
@@ -136,11 +138,15 @@ class Processor:
   def prepare_model(self, mode):
     logger.info("Preparing model")
     self.select_model()
+    logger.info("model info:\n{}".format(self.model))
     logger.info("model on: {}".format(device))
     logger.info("model param size: {}".format(util.model_check.count_num_params(self.model)))
-    logger.info("encoder param size: {}".format(util.model_check.count_num_params(self.model.encoder)))
-    logger.info("decoder param size: {}".format(util.model_check.count_num_params(self.model.decoder)))
-    logger.info("generator param size: {}".format(util.model_check.count_num_params(self.model.generator)))
+    if "encoder" in self.model.__dict__["_modules"]:
+      logger.info("encoder param size: {}".format(util.model_check.count_num_params(self.model.encoder)))
+    if "decoder" in self.model.__dict__["_modules"]:
+      logger.info("decoder param size: {}".format(util.model_check.count_num_params(self.model.decoder)))
+    if "generator" in self.model.__dict__["_modules"]:
+      logger.info("generator param size: {}".format(util.model_check.count_num_params(self.model.generator)))
 
     if mode == "train":
       self.opt_wrapper = util.optimizer.OptimizerWrapper(torch.optim.Adam(self.model.parameters(),

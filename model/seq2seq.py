@@ -11,12 +11,28 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class Seq2SeqModel(torch.nn.Module):
   def __init__(self, setting, src_lang, tgt_lang):
     super(Seq2SeqModel, self).__init__()
+    self.src_lang, self.tgt_lang = src_lang, tgt_lang
+    self.encoder = module.rnn.EncoderRNN(src_lang.vocab_size,
+                                         setting["encoder_vars"]["emb_dim"],
+                                         setting["encoder_vars"]["model_dim"],
+                                         setting["encoder_vars"]["num_layers"],
+                                         setting["encoder_vars"]["bi_directional"],
+                                         setting["decoder_vars"]["model_dim"],
+                                         setting["decoder_vars"]["num_layers"],
+                                         dropout_p=setting["train_vars"]["dropout_p"],
+                                         padding_idx=src_lang.vocab2index["PADDING"],
+                                         reverse_input=False)
 
-    self.encoder = module.rnn.OldEncoderRNN(setting, src_lang)
-
+    num_direction = 2 if setting["encoder_vars"]["bi_directional"] else 1
     self.attention_type = setting["decoder_vars"]["attention_type"]
     if self.attention_type == "luong_general":
-      self.decoder = module.rnn.OldLuongDecoderRNN(setting, tgt_lang)
+      self.decoder = module.rnn.LuongDecoderRNN(src_lang.vocab_size,
+                                                setting["decoder_vars"]["emb_dim"],
+                                                setting["decoder_vars"]["model_dim"],
+                                                setting["decoder_vars"]["num_layers"],
+                                                setting["encoder_vars"]["model_dim"] * num_direction,
+                                                dropout_p=setting["train_vars"]["dropout_p"],
+                                                padding_idx=tgt_lang.vocab2index["PADDING"])
     else:
       raise
 
@@ -27,20 +43,25 @@ class Seq2SeqModel(torch.nn.Module):
 
 
   def translate_for_training(self, batch):
-    outputs, (hidden, cell) = self.encoder(batch)
-    prob_outputs = self.decode_for_training(batch.tgt_batch.sentences,
-                                            outputs,
-                                            batch.src_batch.masks)
+    outputs, (hidden, cell) = self.encoder(batch.src_batch)
+    word_outputs, prob_outputs = self.decode(batch,
+                                             outputs,
+                                             hidden,
+                                             cell,
+                                             batch.tgt_batch.sentences.size(1),
+                                             force_teaching_p=1.0)
     return prob_outputs
 
 
 
   def translate(self, batch, max_length, reverse_output=False):
-    outputs, (hidden, cell) = self.encoder(batch)
-    word_outputs, prob_outputs = self.decode(outputs,
-                                             batch.src_batch.masks,
-                                             max_length,
-                                             reverse_output)
+    assert reverse_output==False
+    outputs, (hidden, cell) = self.encoder(batch.src_batch)
+    word_outputs, prob_outputs = self.decode(batch,
+                                             outputs,
+                                             hidden,
+                                             cell,
+                                             max_length)
     return word_outputs, prob_outputs
 
 
@@ -51,21 +72,21 @@ class Seq2SeqModel(torch.nn.Module):
 
 
 
-  def decode(self, decoder, para_batch, outputs, hidden, cell, max_target_length, force_teaching_p=-1):
+  def decode(self, para_batch, outputs, hidden, cell, max_target_length, force_teaching_p=-1):
     batch_size = para_batch.batch_size
     flag = [False for i in range(batch_size)]
 
     decoder_word_outputs = torch.zeros((batch_size, max_target_length), dtype=torch.long).to(device)
-    decoder_word_outputs[:, 0] = decoder.lang.vocab2index["SEQUENCE_START"] # first word is always SEQUENCE_START
-    decoder_prob_outputs = torch.zeros((batch_size, max_target_length, decoder.lang.vocab_size), dtype=torch.float).to(device)
+    decoder_word_outputs[:, 0] = self.tgt_lang.vocab2index["SEQUENCE_START"] # first word is always SEQUENCE_START
+    decoder_prob_outputs = torch.zeros((batch_size, max_target_length, self.tgt_lang.vocab_size), dtype=torch.float).to(device)
 
     # for experiments of null hidden state
     if not torch.is_tensor(hidden):
-      hidden = torch.zeros((decoder.lstm.num_layers, batch_size, decoder.hidden_size), dtype=torch.float).to(device)
+      hidden = torch.zeros((self.decoder.lstm.num_layers, batch_size, self.decoder.hidden_size), dtype=torch.float).to(device)
     if not torch.is_tensor(cell):
-      cell = torch.zeros((decoder.lstm.num_layers, batch_size, decoder.hidden_size), dtype=torch.float).to(device)
+      cell = torch.zeros((self.decoder.lstm.num_layers, batch_size, self.decoder.hidden_size), dtype=torch.float).to(device)
 
-    dec_state = module.DecoderState(self.attention_type, hidden, cell)
+    dec_state = module.rnn.DecoderState(self.attention_type, hidden, cell)
 
     # decode words one by one
     for i in range(max_target_length-1):
@@ -74,14 +95,14 @@ class Seq2SeqModel(torch.nn.Module):
       else:
         decoder_input = decoder_word_outputs[:, i].unsqueeze(1)
 
-      decoder_output = decoder(decoder_input, dec_state, outputs, para_batch.src_batch.masks)
+      decoder_output = self.decoder(decoder_input, dec_state, outputs, para_batch.src_batch.masks)
       likelihood, index = decoder_output.data.topk(1)
       index = index.squeeze(1)
 
       for j, each in enumerate(index):
         if flag[j]:
-          index[j] = decoder.lang.vocab2index["PADDING"]
-        elif int(each) == decoder.lang.vocab2index["SEQUENCE_END"]:
+          index[j] = self.tgt_lang.vocab2index["PADDING"]
+        elif int(each) == self.tgt_lang.vocab2index["SEQUENCE_END"]:
           flag[j] = True
 
       decoder_word_outputs[:, i+1] = index
