@@ -39,6 +39,24 @@ class TransformerModel(torch.nn.Module):
         raise
 
 
+  def translate_for_training(self, batch):
+    outputs = self.encoder(batch.src_batch.sentences)
+    prob_outputs = self.decode_for_training(batch.tgt_batch.sentences,
+                                            outputs,
+                                            batch.src_batch.masks)
+    return prob_outputs
+
+
+
+  def translate(self, batch, max_length, reverse_output=False):
+    outputs = self.encoder(batch.src_batch.sentences)
+    word_outputs, prob_outputs = self.decode(outputs,
+                                             batch.src_batch.masks,
+                                             max_length,
+                                             reverse_output)
+    return word_outputs, prob_outputs
+
+
 
   def encode(self, input):
     return self.encoder(input)

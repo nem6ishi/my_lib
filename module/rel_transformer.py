@@ -179,7 +179,10 @@ class TransformerEncoder(torch.nn.Module):
   def forward(self, input):
     mask = (input==torch.zeros(input.size(), dtype=torch.long).to(device))
     embedded = self.dropout(self.embedding(input)) # [B,T,H]
-    x = self.positinal_enc(embedded, mask)
+
+    #x = self.positinal_enc(embedded, mask)
+    x = embedded
+
     for layer in self.layers:
       x = layer(x, mask)
     return x
@@ -234,7 +237,9 @@ class TransformerDecoder(torch.nn.Module):
   def forward(self, input, encoder_output, src_mask, time_step=0, layer_cache=None):
     tgt_mask = (input == torch.zeros(input.size(), dtype=torch.long).to(device))
     embedded = self.dropout(self.embedding(input))
-    x = self.positinal_enc(embedded, tgt_mask, time_step=time_step)
+    #x = self.positinal_enc(embedded, tgt_mask, time_step=time_step)
+    x = embedded
+
     for i, layer in enumerate(self.layers):
       x = layer(x, encoder_output, src_mask, tgt_mask, time_step=time_step,
                 layer_cache=layer_cache[i] if layer_cache!=None else None)

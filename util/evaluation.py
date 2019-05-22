@@ -11,14 +11,12 @@ def remove_sp_marker(string):
   return string
 
 
-def apply_sp(file_path, use_kytea=False):
+def apply_sp(file_path):
   text = ""
   with open(file_path, "r") as file:
     for line in file:
       line = line.strip()
       line = remove_sp_marker(line) + "\n"
-      #if use_kytea:
-      #  line = line.replace(" ", "")
       text += line
   with open(file_path, "w") as file:
     file.write(text)
@@ -44,23 +42,23 @@ def apply_kytea(file_path):
 
 
 
-def calc_bleu(reference_file_path, prediction_file_path, use_sp, use_kytea, save_dir="./", file_name=""):
+def calc_bleu(reference_file_path, prediction_file_path, use_sp=False, use_kytea=False, save_dir="./", file_name=""):
 
-  time_stamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+  time_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
   if file_name=="":
-    reference_file = save_dir + "/tmp_ref_{}.txt".format(time_stamp)
-    prediction_file = save_dir + "/modified_pre_{}.txt".format(time_stamp)
+    reference_file = save_dir + "/reference_{}.txt".format(time_stamp)
+    prediction_file = save_dir + "/prediction_{}.txt".format(time_stamp)
   else:
-    reference_file = save_dir + "/{}_ref_{}.txt".format(file_name, time_stamp)
-    prediction_file = save_dir + "/{}_pre_{}.txt".format(file_name, time_stamp)
+    reference_file = save_dir + "/{}_reference_{}.txt".format(file_name, time_stamp)
+    prediction_file = save_dir + "/{}_prediction_{}.txt".format(file_name, time_stamp)
 
   shutil.copyfile(reference_file_path, reference_file)
   shutil.copyfile(prediction_file_path, prediction_file)
 
   if use_sp:
-    apply_sp(reference_file, use_kytea)
-    apply_sp(prediction_file, use_kytea)
+    apply_sp(reference_file)
+    apply_sp(prediction_file)
 
   if use_kytea:
     apply_kytea(reference_file)

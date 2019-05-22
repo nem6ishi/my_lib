@@ -9,7 +9,7 @@ class SingleCorpus:
 
     self.lang = lang
     self.file_path = file_path
-    self.max_length = max_length # the limit at first, but will be updated actual max length when importing
+    self.max_length = max_length # the limit at first, but will be updated as actual max length when importing
     self.num_imort_line = num_imort_line
 
     self.corpus_size = 0
@@ -20,13 +20,13 @@ class SingleCorpus:
     self.remove_indexes_set = self.check_length()
 
 
-  def check_length(self): # check length before importing. doing this before import is for parallel corpus
+  def check_length(self): # check length before importing. do this before import for parallel corpus
     remove_indexes_set = set()
     if self.max_length > 0:
       with open(self.file_path, "r", encoding='utf-8') as file:
         for i, sent in enumerate(file):
           assert "　" not in sent
-          if self.num_imort_line == i:
+          if i == self.num_imort_line:
             break
           len_sent = sent.count(' ') + 1
           if len_sent > self.max_length:
@@ -42,7 +42,7 @@ class SingleCorpus:
     tmp_max_length = 0
     with open(self.file_path, "r", encoding='utf-8') as file:
       for i, sent in enumerate(file):
-        if self.num_imort_line == i:
+        if i == self.num_imort_line:
           break
         if i not in self.remove_indexes_set:
           self.sentences[self.corpus_size] = sent ### save sentence as str first, and convert it later
@@ -75,7 +75,7 @@ class ParallelCorpus:
     self.tgt_lang = tgt_lang
 
     self.src_corpus = SingleCorpus(src_lang, src_file_path, max_length, self.num_imort_line)
-    if self.share_corpus or tgt_file_path == None : # None for test time in which no tgt_corpus
+    if self.share_corpus or tgt_file_path == None : # None for test time in which there is no tgt_corpus
       self.tgt_corpus = self.src_corpus
     else:
       self.tgt_corpus = SingleCorpus(tgt_lang, tgt_file_path, max_length, self.num_imort_line)
@@ -117,13 +117,12 @@ class SingleBatch:
 
 
   def generate_random_indexes(self):
-    self.enable_cat = True if self.num_cat_sent>1 else False
+    self.enable_cat = True if self.num_cat_sent > 1 else False
     self.sample_idxs = numpy.random.randint(0, self.corpus.corpus_size, self.fixed_batch_size*self.num_cat_sent)
 
 
   def generate_sequential_indexes(self, num_iter):
     self.enable_cat = False
-
     num_done = self.fixed_batch_size * num_iter
     num_rest = self.corpus.corpus_size - num_done
     if num_rest < self.fixed_batch_size:
