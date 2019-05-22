@@ -40,9 +40,9 @@ class RNNTransformerModel(torch.nn.Module):
 
 
 
-  def translate_for_training(self, batch):
+  def translate_for_train(self, batch):
     outputs = self.encoder(batch.src_batch.sentences)
-    prob_outputs = self.decode_for_training(batch.tgt_batch.sentences,
+    prob_outputs = self.decode_for_train(batch.tgt_batch.sentences,
                                             outputs,
                                             batch.src_batch.masks)
     return prob_outputs
@@ -64,7 +64,7 @@ class RNNTransformerModel(torch.nn.Module):
 
 
 
-  def decode_for_training(self, tgt_sent, encoder_outputs, src_mask):
+  def decode_for_train(self, tgt_sent, encoder_outputs, src_mask):
     decoder_output, _hidden = self.decoder(tgt_sent, encoder_outputs, src_mask)
     decoder_prob_outputs = self.generator(decoder_output)
     return decoder_prob_outputs

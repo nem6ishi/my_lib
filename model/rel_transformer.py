@@ -7,9 +7,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 
-class TransformerModel(torch.nn.Module):
+class RelTransformerModel(torch.nn.Module):
   def __init__(self, setting, src_lang, tgt_lang):
-    super(TransformerModel, self).__init__()
+    super(RelTransformerModel, self).__init__()
     self.src_lang, self.tgt_lang = src_lang, tgt_lang
     self.encoder = module.rel_transformer.TransformerEncoder(src_lang.vocab_size,
                                                          setting["encoder_vars"]["emb_dim"],
@@ -38,6 +38,23 @@ class TransformerModel(torch.nn.Module):
       else:
         raise
 
+
+  def translate_for_train(self, batch):
+    outputs = self.encoder(batch.src_batch.sentences)
+    prob_outputs = self.decode_for_train(batch.tgt_batch.sentences,
+                                            outputs,
+                                            batch.src_batch.masks)
+    return prob_outputs
+
+
+
+  def translate(self, batch, max_length, reverse_output=False):
+    outputs = self.encoder(batch.src_batch.sentences)
+    word_outputs, prob_outputs = self.decode(outputs,
+                                             batch.src_batch.masks,
+                                             max_length,
+                                             reverse_output)
+    return word_outputs, prob_outputs
 
 
   def encode(self, input):

@@ -29,10 +29,9 @@ class Processor:
     self.best_bleu = 0.0
 
     logger.info(json.dumps(self.setting, indent = 2))
-
+    torch.set_num_threads(4)
 
   def train(self):
-    torch.set_num_threads(4)
     self.check_previous_training()
     self.load_data()
     self.prepare_model(mode="train")
@@ -41,12 +40,11 @@ class Processor:
 
 
   def predict(self):
-    torch.set_num_threads(4)
     self.check_previous_training()
     self.load_data()
     self.prepare_model(mode="test")
-    logger.info("Start prediction")
-    self.prediction()
+    #logger.info("Start prediction")
+    #self.prediction()
 
 
 
@@ -122,15 +120,21 @@ class Processor:
 
 
   def select_model(self):
-    if self.setting["train_vars"]["model_type"] == "transformer":
-      self.model = model.transformer.TransformerModel(self.setting, self.src_lang, self.tgt_lang).to(device)
-    elif self.setting["train_vars"]["model_type"] == "seq2seq":
+    if self.setting["train_vars"]["model_type"] == "seq2seq":
       self.model = model.seq2seq.Seq2SeqModel(self.setting, self.src_lang, self.tgt_lang).to(device)
-      """
-      elif self.setting["train_vars"]["model_type"] == "transformer":
-      elif self.setting["train_vars"]["model_type"] == "transformer":
-      elif self.setting["train_vars"]["model_type"] == "transformer":
-      """
+
+    elif self.setting["train_vars"]["model_type"] == "transformer":
+      self.model = model.transformer.TransformerModel(self.setting, self.src_lang, self.tgt_lang).to(device)
+
+    elif self.setting["train_vars"]["model_type"] == "rnn_transformer":
+      self.model = model.rnn_transformer.RNNTransformerModel(self.setting, self.src_lang, self.tgt_lang).to(device)
+
+    elif self.setting["train_vars"]["model_type"] == "rel_transformer":
+      self.model = model.rel_transformer.RelTransformerModel(self.setting, self.src_lang, self.tgt_lang).to(device)
+
+    elif self.setting["train_vars"]["model_type"] == "rnn_rel_transformer":
+      self.model = model.rnn_rel_transformer.RNNRelTransformerModel(self.setting, self.src_lang, self.tgt_lang).to(device)
+
     else:
       raise
 
@@ -193,14 +197,31 @@ class Processor:
     logger.info("Model ready")
 
 
+  def tensorboard_log(self, step, tmp_bleu, best_bleu, ave_loss=False, tmp_loss=False, ave_norm=False, tmp_norm=False):
+    log_dir=self.setting["paths"]["model_directory"] + '/tb_logs/'
+    writer = tensorboardX.SummaryWriter(log_dir=log_dir)
+    writer.add_scalar('bleu_score/tmp', tmp_bleu, step)
+    writer.add_scalar('bleu_score/best', best_bleu, step)
+    if ave_loss:
+      writer.add_scalar('loss/average', ave_loss, step)
+    if tmp_loss:
+      writer.add_scalar('loss/tmp', tmp_loss, step)
+    if ave_loss:
+      writer.add_scalar('norm/average', ave_norm, step)
+    if ave_loss:
+      writer.add_scalar('norm/tmp', tmp_norm, step)
+    writer.close()
+
+
   def train_iter(self):
     logger.info("Start training")
     if self.step == 0:
-      log_dir=self.setting["paths"]["model_directory"] + '/tb_logs/'
-      writer = tensorboardX.SummaryWriter(log_dir=log_dir)
-      writer.add_scalar('bleu_score/tmp', 0.0, self.step)
-      writer.add_scalar('bleu_score/best', 0.0, self.step)
-      writer.close()
+      self.tensorboard_log(self.step, 0.0, 0.0)
+    additional_check_steps = []
+    for i in range(2, 6):
+      check_step = 10**i
+      if check_step>self.step and check_step<self.setting["train_vars"]["check_steps"]:
+        additional_check_steps.append(check_step)
 
     while self.step < self.setting["train_vars"]["step"]:
       logger.info("Train model for {} steps".format(self.setting["train_vars"]["check_steps"]))
@@ -216,23 +237,25 @@ class Processor:
         loss, norm = self.train_one_step(batch)
         average_loss += loss
         average_norm += norm
-        if self.step%(self.setting["train_vars"]["check_steps"]//10)==0:
+        if self.step%(self.setting["train_vars"]["check_steps"]//10)==0 or self.step in additional_check_steps:
           logger.info("{} steps done.\tLoss: {}".format(self.step, loss))
+          if self.step in additional_check_steps:
+            tmp_score = self.validation()
+            self.tensorboard_log(self.step, tmp_score, self.best_bleu, tmp_loss=loss, tmp_norm=norm)
+            additional_check_steps.remove(self.step)
 
       # validation and save
-      tmp_score, error = self.validation()
-      self.save(tmp_score, error)
+      tmp_score = self.validation()
+      self.save()
 
       # save data for tensorboard
-      log_dir=self.setting["paths"]["model_directory"] + '/tb_logs/'
-      writer = tensorboardX.SummaryWriter(log_dir=log_dir)
-      writer.add_scalar('loss/average', average_loss/self.setting["train_vars"]["check_steps"], self.step)
-      writer.add_scalar('loss/tmp', loss, self.step)
-      writer.add_scalar('norm/average', average_norm/self.setting["train_vars"]["check_steps"], self.step)
-      writer.add_scalar('norm/tmp', norm, self.step)
-      writer.add_scalar('bleu_score/tmp', tmp_score, self.step)
-      writer.add_scalar('bleu_score/best', self.best_bleu, self.step)
-      writer.close()
+      self.tensorboard_log(self.step,
+                           tmp_score,
+                           self.best_bleu,
+                           ave_loss=average_loss/self.setting["train_vars"]["check_steps"],
+                           tmp_loss=loss,
+                           ave_norm=average_norm/self.setting["train_vars"]["check_steps"],
+                           tmp_norm=norm)
 
 
   def train_one_step(self, batch):
@@ -243,7 +266,7 @@ class Processor:
     self.model.train()
     self.opt_wrapper.optimizer.zero_grad()
 
-    prob_outputs = self.model.translate_for_training(batch)
+    prob_outputs = self.model.translate_for_train(batch)
     loss = self.criterion(prob_outputs[:, :-1].contiguous().view(-1, self.tgt_lang.vocab_size),
                           batch.tgt_batch.sentences[:, 1:].contiguous().view(-1))
     loss.backward()
@@ -291,13 +314,10 @@ class Processor:
                                              self.setting["options"]["use_kytea"],
                                              save_dir=save_dir)
     logger.info("Bleu score: {} @step {}".format(score, self.step))
-    return score, error
 
-
-  def save(self, tmp_score, error):
     # save bleu_score
     bleu_file = self.setting["paths"]["model_directory"] + "/bleu_score.txt"
-    line = str(self.step) + "\t" + str(tmp_score)
+    line = str(self.step) + "\t" + str(score)
     if error:
        line += "\t*ERROR"
     with open(bleu_file, "a") as file:
@@ -305,10 +325,14 @@ class Processor:
 
     # update best score & step
     prev_best_step = self.best_step
-    if self.best_bleu <= tmp_score:
-      self.best_step, self.best_bleu = self.step, tmp_score
+    if self.best_bleu <= score:
+      self.best_step, self.best_bleu = self.step, score
     logger.info("Best bleu score: {} @step {}".format(self.best_bleu, self.best_step))
 
+    return score
+
+
+  def save(self):
     # save current model
     logger.info("Save model")
     save_dir = self.setting["paths"]["model_directory"] + '/models/step_' + str(self.step)

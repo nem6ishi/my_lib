@@ -42,7 +42,7 @@ class Seq2SeqModel(torch.nn.Module):
 
 
 
-  def translate_for_training(self, batch):
+  def translate_for_train(self, batch):
     outputs, (hidden, cell) = self.encoder(batch.src_batch)
     word_outputs, prob_outputs = self.decode(batch,
                                              outputs,
