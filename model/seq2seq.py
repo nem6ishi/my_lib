@@ -50,7 +50,7 @@ class Seq2SeqModel(torch.nn.Module):
                                              cell,
                                              batch.tgt_batch.sentences.size(1),
                                              force_teaching_p=1.0)
-    return prob_outputs
+    return prob_outputs[:, 1:]
 
 
 

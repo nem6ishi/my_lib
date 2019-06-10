@@ -49,7 +49,7 @@ class Model(torch.nn.Module):
 
 
   def decode_for_train(self, tgt_sent, encoder_outputs, src_mask):
-    decoder_output = self.decoder(tgt_sent, encoder_outputs, src_mask)
+    decoder_output = self.decoder(tgt_sent[:, :-1], encoder_outputs, src_mask)
     decoder_prob_outputs = self.generator(decoder_output)
     return decoder_prob_outputs
 
@@ -123,7 +123,7 @@ class Model(torch.nn.Module):
           index[j] = self.tgt_lang.vocab2index["PADDING"]
         else:
           dec_state.lengths[j] += 1
-          
+
       scores = self.calc_score(probs, dec_state.lengths, dec_state.reached_end)
       scores, sort_indexes = scores.view(beam_size*beam_size, -1).sort(0, descending=True)
 

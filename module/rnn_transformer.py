@@ -101,7 +101,7 @@ class TransformerEncoderLayer(torch.nn.Module):
 
 
 class RNNTransformerEncoder(torch.nn.Module):
-  def __init__(self, vocab_size, emb_dim, model_dim, ff_dim, num_layers, num_head, dropout_p=0.1, padding_idx=0):
+  def __init__(self, vocab_size, emb_dim, model_dim, ff_dim, num_layers, num_head, bi_directional, dropout_p=0.1, padding_idx=0):
     super(RNNTransformerEncoder, self).__init__()
 
     self.vocab_size = vocab_size
@@ -110,12 +110,17 @@ class RNNTransformerEncoder(torch.nn.Module):
     self.ff_dim = ff_dim
     self.num_layers = num_layers
     self.num_head = num_head
+    self.bi_directional = bi_directional
+    self.num_directions = 2 if bi_directional else 1
 
     self.dropout_p = dropout_p
 
     self.embedding = torch.nn.Embedding(self.vocab_size, self.emb_dim, padding_idx=padding_idx)
-    self.rnn = torch.nn.GRU(self.emb_dim, self.model_dim, num_layers=1, batch_first=True, bidirectional=True)
-    self.ff = torch.nn.Linear(self.model_dim*2, self.model_dim)
+    self.rnn = torch.nn.GRU(self.emb_dim, self.model_dim, num_layers=1, batch_first=True, bidirectional=self.bi_directional)
+
+    if self.bi_directional:
+      self.ff = torch.nn.Linear(self.model_dim*2, self.model_dim)
+
     self.layers = torch.nn.ModuleList([TransformerEncoderLayer(self.model_dim, self.num_head, self.ff_dim, self.dropout_p) for i in range(self.num_layers)])
     self.dropout = torch.nn.Dropout(self.dropout_p)
 
@@ -124,8 +129,9 @@ class RNNTransformerEncoder(torch.nn.Module):
     mask = (input==torch.zeros(input.size(), dtype=torch.long).to(device))
     embedded = self.dropout(self.embedding(input)) # [B,T,H]
 
-    x, _hidden = self.rnn(embedded) #bi-directional
-    x = self.ff(x)
+    x, _hidden = self.rnn(embedded)
+    if self.bi_directional:
+      x = self.ff(x)
     mask_here = mask.unsqueeze(-1).expand(-1, -1, x.size(-1))
     x = x.masked_fill(mask_here, 0.0)
 

@@ -41,7 +41,7 @@ class RelTransformerModel(torch.nn.Module):
 
   def translate_for_train(self, batch):
     outputs = self.encoder(batch.src_batch.sentences)
-    prob_outputs = self.decode_for_train(batch.tgt_batch.sentences,
+    prob_outputs = self.decode_for_train(batch.tgt_batch.sentences[:, :-1],
                                             outputs,
                                             batch.src_batch.masks)
     return prob_outputs

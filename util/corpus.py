@@ -26,7 +26,7 @@ class SingleCorpus:
       with open(self.file_path, "r", encoding='utf-8') as file:
         for i, sent in enumerate(file):
           assert "　" not in sent
-          if i == self.num_imort_line:
+          if self.num_imort_line>0 and i > self.num_imort_line:
             break
           len_sent = sent.count(' ') + 1
           if len_sent > self.max_length:
@@ -42,7 +42,7 @@ class SingleCorpus:
     tmp_max_length = 0
     with open(self.file_path, "r", encoding='utf-8') as file:
       for i, sent in enumerate(file):
-        if i == self.num_imort_line:
+        if self.num_imort_line>0 and i > self.num_imort_line:
           break
         if i not in self.remove_indexes_set:
           self.sentences[self.corpus_size] = sent ### save sentence as str first, and convert it later

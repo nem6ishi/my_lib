@@ -17,6 +17,7 @@ class RNNRelTransformerModel(torch.nn.Module):
                                                          setting["encoder_vars"]["ff_dim"],
                                                          setting["encoder_vars"]["num_layers"],
                                                          setting["encoder_vars"]["num_head"],
+                                                         setting["encoder_vars"]["bi_directional"],
                                                          dropout_p=setting["train_vars"]["dropout_p"],
                                                          padding_idx=src_lang.vocab2index["PADDING"])
 
@@ -41,7 +42,7 @@ class RNNRelTransformerModel(torch.nn.Module):
 
   def translate_for_train(self, batch):
     outputs = self.encoder(batch.src_batch.sentences)
-    prob_outputs = self.decode_for_train(batch.tgt_batch.sentences,
+    prob_outputs = self.decode_for_train(batch.tgt_batch.sentences[:, :-1],
                                             outputs,
                                             batch.src_batch.masks)
     return prob_outputs

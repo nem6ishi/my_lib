@@ -245,7 +245,6 @@ class TransformerDecoder(torch.nn.Module):
 
 
 
-
 class TransformerGenerator(torch.nn.Module):
   def __init__(self, vocab_size, model_dim):
     super(TransformerGenerator, self).__init__()

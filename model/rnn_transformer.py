@@ -3,8 +3,10 @@ import sys, torch, copy, random
 sys.path.append("/home/neishi/workspace/my_lib")
 import module.rnn_transformer
 import module.transformer
+import model.transformer
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 
 class RNNTransformerModel(torch.nn.Module):
@@ -17,6 +19,7 @@ class RNNTransformerModel(torch.nn.Module):
                                                          setting["encoder_vars"]["ff_dim"],
                                                          setting["encoder_vars"]["num_layers"],
                                                          setting["encoder_vars"]["num_head"],
+                                                         setting["encoder_vars"]["bi_directional"],
                                                          dropout_p=setting["train_vars"]["dropout_p"],
                                                          padding_idx=src_lang.vocab2index["PADDING"])
 
@@ -42,7 +45,7 @@ class RNNTransformerModel(torch.nn.Module):
 
   def translate_for_train(self, batch):
     outputs = self.encoder(batch.src_batch.sentences)
-    prob_outputs = self.decode_for_train(batch.tgt_batch.sentences,
+    prob_outputs = self.decode_for_train(batch.tgt_batch.sentences[:, :-1],
                                             outputs,
                                             batch.src_batch.masks)
     return prob_outputs

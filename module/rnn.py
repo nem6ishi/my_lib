@@ -113,7 +113,6 @@ class EncoderRNN(torch.nn.Module):
     batch.lengths = batch.lengths.tolist()
     batch.sentences = batch.sentences[sort_indexes]
     batch.masks = batch.masks[sort_indexes]
-
     return sort_indexes
 
 

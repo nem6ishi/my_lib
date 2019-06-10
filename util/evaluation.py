@@ -42,16 +42,14 @@ def apply_kytea(file_path):
 
 
 
-def calc_bleu(reference_file_path, prediction_file_path, use_sp=False, use_kytea=False, save_dir="./", file_name=""):
+def calc_bleu(reference_file_path, prediction_file_path, use_sp=False, use_kytea=False, save_dir="./", add_file_name=""):
 
-  time_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-
-  if file_name=="":
-    reference_file = save_dir + "/reference_{}.txt".format(time_stamp)
-    prediction_file = save_dir + "/prediction_{}.txt".format(time_stamp)
+  if add_file_name:
+    reference_file = save_dir + "/reference_{}.txt".format(add_file_name)
+    prediction_file = save_dir + "/prediction_{}.txt".format(add_file_name)
   else:
-    reference_file = save_dir + "/{}_reference_{}.txt".format(file_name, time_stamp)
-    prediction_file = save_dir + "/{}_prediction_{}.txt".format(file_name, time_stamp)
+    reference_file = save_dir + "/reference.txt"
+    prediction_file = save_dir + "/prediction.txt"
 
   shutil.copyfile(reference_file_path, reference_file)
   shutil.copyfile(prediction_file_path, prediction_file)
