@@ -5,30 +5,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 
-class PositionalEncoding(torch.nn.Module):
-  def __init__(self, emb_dim, dropout_p=0.1, max_len=1000): # if change max_len, loading models may be compricated
-    super(PositionalEncoding, self).__init__()
-    self.dropout = torch.nn.Dropout(p=dropout_p)
-
-    pe = torch.zeros(max_len, emb_dim)
-    position = torch.arange(0, max_len).unsqueeze(1)
-    div_term = torch.exp(torch.arange(0.0, emb_dim, 2) * -(math.log(10000.0) / emb_dim))
-    pe[:, 0::2] = torch.sin(position.float() * div_term)
-    pe[:, 1::2] = torch.cos(position.float() * div_term)
-    pe = pe.unsqueeze(0)
-    self.register_buffer('pe', pe)
-
-  def forward(self, x, mask, time_step=0, tmp_reverse=False):
-    if tmp_reverse:
-      x = x[:, list(range(x.size(1)-1,-1,-1))]
-    x = x + self.pe[:, time_step:time_step+x.size(1)]
-    if tmp_reverse:
-      x = x[:, list(range(x.size(1)-1,-1,-1))]
-    x.masked_fill_(mask.unsqueeze(-1).expand(-1, -1, x.size(-1)), 0.0)
-    return self.dropout(x)
-
-
-
 class MultiHeadedAttention(torch.nn.Module):
   def __init__(self, num_head, model_dim, dropout_p=0.1):
     super(MultiHeadedAttention, self).__init__()
@@ -138,38 +114,8 @@ class TransformerEncoder(torch.nn.Module):
     self.dropout_p = dropout_p
 
     self.embedding = torch.nn.Embedding(self.vocab_size, self.emb_dim, padding_idx=padding_idx)
-    self.positinal_enc = PositionalEncoding(self.emb_dim, self.dropout_p)
-    self.layers = torch.nn.ModuleList([TransformerEncoderLayer(self.model_dim, self.num_head, self.ff_dim, self.dropout_p) for i in range(self.num_layers)])
-    self.dropout = torch.nn.Dropout(self.dropout_p)
-
-
-  def forward(self, input):
-    mask = (input==torch.zeros(input.size(), dtype=torch.long).to(device))
-    embedded = self.dropout(self.embedding(input)) # [B,T,H]
-    x = self.positinal_enc(embedded, mask)
-    for layer in self.layers:
-      x = layer(x, mask)
-    return x
-
-
-
-
-class BidirectionalTransformerEncoder(torch.nn.Module):
-  def __init__(self, vocab_size, emb_dim, model_dim, ff_dim, num_layers, num_head, dropout_p=0.1, padding_idx=0):
-    super(BidirectionalTransformerEncoder, self).__init__()
-
-    self.vocab_size = vocab_size
-    self.emb_dim = emb_dim
-    self.model_dim =  model_dim
-    self.ff_dim = ff_dim
-    self.num_layers = num_layers
-    self.num_head = num_head
-
-    self.dropout_p = dropout_p
-
-    self.embedding = torch.nn.Embedding(self.vocab_size, self.emb_dim, padding_idx=padding_idx)
-    self.positinal_enc = PositionalEncoding(self.emb_dim, self.dropout_p)
-    self.ff = torch.nn.Linear(emb_dim*2, emb_dim)
+    max_sent_length = 1000
+    self.pos_embedding = torch.nn.Embedding(max_sent_length, self.emb_dim)
     self.layers = torch.nn.ModuleList([TransformerEncoderLayer(self.model_dim, self.num_head, self.ff_dim, self.dropout_p) for i in range(self.num_layers)])
     self.dropout = torch.nn.Dropout(self.dropout_p)
 
@@ -178,9 +124,10 @@ class BidirectionalTransformerEncoder(torch.nn.Module):
     mask = (input==torch.zeros(input.size(), dtype=torch.long).to(device))
     embedded = self.dropout(self.embedding(input)) # [B,T,H]
 
-    x1 = self.positinal_enc(embedded, mask)
-    x2 = self.positinal_enc(embedded, mask, tmp_reverse=True)
-    x = self.dropout(self.ff(torch.cat((x1,x2), -1)))
+    pos_id = torch.LongTensor([list(range(input.size(1))) for i in range(input.size(0))]).to(device)
+    pos_emb = self.pos_embedding(pos_id)
+    x = self.dropout(embedded + pos_emb)
+    x = x.masked_fill(mask.unsqueeze(-1).expand(-1, -1, x.size(-1)), 0.0)
 
     for layer in self.layers:
       x = layer(x, mask)
@@ -229,7 +176,8 @@ class TransformerDecoder(torch.nn.Module):
     self.dropout_p = dropout_p
 
     self.embedding = torch.nn.Embedding(self.vocab_size, self.emb_dim, padding_idx=padding_idx)
-    self.positinal_enc = PositionalEncoding(self.emb_dim, self.dropout_p)
+    max_sent_length = 1000
+    self.pos_embedding = torch.nn.Embedding(max_sent_length, self.emb_dim)
     self.layers = torch.nn.ModuleList([TransformerDecoderLayer(self.model_dim, self.num_head, self.ff_dim, self.dropout_p) for i in range(self.num_layers)])
     self.dropout = torch.nn.Dropout(self.dropout_p)
 
@@ -237,7 +185,15 @@ class TransformerDecoder(torch.nn.Module):
   def forward(self, input, encoder_output, src_mask, time_step=0, layer_cache=None):
     tgt_mask = (input == torch.zeros(input.size(), dtype=torch.long).to(device))
     embedded = self.dropout(self.embedding(input))
-    x = self.positinal_enc(embedded, tgt_mask, time_step=time_step)
+
+    if time_step==0 and input.size(1)!=1:
+      pos_id = torch.LongTensor([list(range(input.size(1))) for i in range(input.size(0))]).to(device)
+    else:
+      pos_id = torch.LongTensor([[time_step] for i in range(input.size(0))]).to(device)
+    pos_emb = self.pos_embedding(pos_id)
+    x = self.dropout(embedded + pos_emb)
+    x = x.masked_fill(tgt_mask.unsqueeze(-1).expand(-1, -1, x.size(-1)), 0.0)
+
     for i, layer in enumerate(self.layers):
       x = layer(x, encoder_output, src_mask, tgt_mask,
                 layer_cache=layer_cache[i] if layer_cache!=None else None)

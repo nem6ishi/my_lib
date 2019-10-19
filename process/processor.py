@@ -1,4 +1,5 @@
-import torch, sys, random, os, re, glob, json, math, tensorboardX, datetime
+import torch, sys, random, os, re, glob, json, math, tensorboardX, datetime, pickle
+
 
 sys.path.append("/home/neishi/workspace/my_lib")
 import util
@@ -137,10 +138,12 @@ class Processor:
     elif self.setting["train_vars"]["model_type"] == "rnn_rel_transformer":
       self.model = model.rnn_rel_transformer.RNNRelTransformerModel(self.setting, self.src_lang, self.tgt_lang)
 
+    elif self.setting["train_vars"]["model_type"] == "posemb_transformer":
+      self.model = model.posemb_transformer.TransformerModel(self.setting, self.src_lang, self.tgt_lang)
+      
     else:
       raise
 
-    #self.model = self.model.to(device)
     self.model.to(device)
 
 
@@ -285,6 +288,9 @@ class Processor:
 
     self.model.eval()
     prediction_sents = []
+
+    likelihood_data = []
+
     with torch.no_grad():
       for i in range(math.ceil(corpus.corpus_size / batch_size)):
         num_rest = corpus.corpus_size - i*batch_size
@@ -296,10 +302,27 @@ class Processor:
         word_outputs, prob_outputs = self.model.translate(batch,
                                                           self.setting["train_vars"]["prediction_max_length"],
                                                           reverse_output=self.setting["options"]["reverse_output"])
+        """likelihood, index = prob_outputs.data.topk(2)
+
+        index1 = index[:,:,0]
+        likelihood1 = likelihood[:,:,0]
+        index2 = index[:,:,1]
+        likelihood2 = likelihood[:,:,1]
+
+        for j in range(likelihood.size(0)):
+          for k in range(likelihood.size(1)):
+            if word_outputs[j,k] not in [0, 2]:
+              likelihood_data.append([k, math.exp(likelihood1[j,k]), math.exp(likelihood2[j,k])])
+        """
 
         for each in list(word_outputs):
           sent = self.tgt_lang.indexes2sentence(each, reverse=self.setting["options"]["reverse_output"])
           prediction_sents.append(sent)
+
+
+    #with open('/home/neishi/workspace/topk_greedy/model/trans_aspec_sp16k_enja/test/likelihood_data_top1&2.dump', 'wb') as f:
+    #  pickle.dump(likelihood_data, f)
+
 
     return prediction_sents
 
@@ -376,7 +399,12 @@ class Processor:
 
   def test_process(self):
     logger.info("Prediction")
-    prediction_sents = self.prediction(self.test_corpus, batch_size=self.setting["train_vars"]["valid_batch_size"])
+    if self.mode=="train":
+      batch_size = self.setting["train_vars"]["valid_batch_size"]
+    elif self.mode=="test":
+      batch_size = self.setting["pred_vars"]["batch_size"]
+
+    prediction_sents = self.prediction(self.test_corpus, batch_size=batch_size)
 
     logger.info("Save test prediction")
     save_dir = self.setting["paths"]["model_directory"] + '/test/'
@@ -398,5 +426,3 @@ class Processor:
                                                save_dir=save_dir,
                                                add_file_name=time_stamp)
       logger.info("Bleu score: {} @step {}".format(score, self.step))
-
-    return score, error
